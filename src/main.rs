@@ -3,16 +3,16 @@
 #![deny(future_incompatible, clippy::unwrap_used)]
 #![warn(rust_2018_idioms, trivial_casts)]
 
-mod notion;
-mod workspace;
+mod cache;
+mod migrator;
 
 use std::process::exit;
 
+use cache::Cache;
 use clap::Parser;
 use fzf_wrapped::{run_with_output, Fzf};
 use miette::{IntoDiagnostic, Result};
 use owo_colors::OwoColorize;
-use workspace::WorkspaceCache;
 
 #[derive(Parser, Debug)]
 #[clap(name = "nuclino-to-notion", version)]
@@ -58,15 +58,17 @@ async fn main() -> Result<()> {
         exit(1);
     };
 
+    let mut cache = Cache::new("nuclino_team_name".to_string(), nuclino_key, &args)?;
+
     println!("Migrating the {} workspace...", to_migrate.blue());
-    let cache = WorkspaceCache::new(found, nuclino_key, notion_key, &args)?;
     if args.populate {
         println!("Populating the Nuclino cache…");
-        cache.populate()?;
+        cache.cache_workspace(found)?;
     }
-    if let Some(_parent) = args.parent {
+    if let Some(parent) = args.parent {
         println!("Doing migration…");
-        cache.migrate().await?;
+        let migrator = migrator::Migrator::new(notion_key, parent)?;
+        migrator.migrate(cache, &found).await?;
     }
 
     Ok(())
