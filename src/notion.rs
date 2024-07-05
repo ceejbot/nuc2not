@@ -19,10 +19,7 @@ pub fn properties_from_nuclino(page: &Page) -> BTreeMap<String, PageProperty> {
     let created_time: DateTime<Utc> = page.created().parse().unwrap_or_else(|_| Utc::now());
     properties.insert(
         "created_time".to_string(),
-        PageProperty::CreatedTime {
-            id: None,
-            created_time,
-        },
+        PageProperty::CreatedTime { id: None, created_time },
     );
     let last_edited_time = match page.modified().parse::<DateTime<Utc>>() {
         Ok(v) => Some(v),
@@ -43,10 +40,7 @@ pub fn properties_from_nuclino(page: &Page) -> BTreeMap<String, PageProperty> {
     }
 }
 
-fn add_item_props(
-    item: &Item,
-    properties: BTreeMap<String, PageProperty>,
-) -> BTreeMap<String, PageProperty> {
+fn add_item_props(item: &Item, properties: BTreeMap<String, PageProperty>) -> BTreeMap<String, PageProperty> {
     if let Some(_content) = item.content() {
 
         // todo

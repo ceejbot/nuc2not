@@ -34,21 +34,15 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let _ignored = dotenvy::dotenv().into_diagnostic()?;
-    let notion_key = std::env::var("NOTION_API_KEY")
-        .expect("You must provide a Notion api key in the env var NOTION_API_KEY.");
-    let nuclino_key = std::env::var("NUCLINO_API_KEY")
-        .expect("You must provide a Nuclino api key in the env var NUCLINO_API_KEY.");
+    let notion_key =
+        std::env::var("NOTION_API_KEY").expect("You must provide a Notion api key in the env var NOTION_API_KEY.");
+    let nuclino_key =
+        std::env::var("NUCLINO_API_KEY").expect("You must provide a Nuclino api key in the env var NUCLINO_API_KEY.");
 
     let client = nuclino_rs::Client::create(nuclino_key.as_str(), None);
-    let workspaces = client
-        .workspace_list(None, None)
-        .into_diagnostic()?
-        .to_vec();
+    let workspaces = client.workspace_list(None, None).into_diagnostic()?.to_vec();
 
-    let names: Vec<String> = workspaces
-        .iter()
-        .map(|space| space.name().to_string())
-        .collect();
+    let names: Vec<String> = workspaces.iter().map(|space| space.name().to_string()).collect();
     let fzf = Fzf::builder()
         .border(fzf_wrapped::Border::Rounded)
         .border_label("Select a workspace to migrate")
@@ -59,10 +53,7 @@ async fn main() -> Result<()> {
         exit(0);
     };
 
-    let Some(found) = workspaces
-        .iter()
-        .find(|space| space.name() == to_migrate.as_str())
-    else {
+    let Some(found) = workspaces.iter().find(|space| space.name() == to_migrate.as_str()) else {
         println!("No workspace of that name exists, to everyone's surprise.");
         exit(1);
     };
