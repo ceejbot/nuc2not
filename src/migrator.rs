@@ -45,8 +45,13 @@ impl Migrator {
         Ok(Self { notion, parent })
     }
 
+    /// We walk workspace children instead of getting a full list of workspace pages
+    /// so that we can guarantee that any links on a specific page have been migrated
+    /// and have Notion URLs before we try to migrate the page itself.
     pub async fn migrate(&self, cache: Cache, workspace: &Workspace) -> Result<()> {
         let _ignored = CACHE.set(cache);
+
+        // Is there a better way?
         let futures: Vec<_> = workspace
             .children()
             .iter()
@@ -56,21 +61,16 @@ impl Migrator {
         while let Some(child_result) = buffered.next().await {
             let child = child_result?;
             println!("migrated {:?}", child);
-            // println!("{:?}", urlmap());
         }
 
         // emit some info
+        // println!("{:?}", urlmap());
 
         Ok(())
     }
 
     async fn migrate_page(&self, id: &Uuid, parent: &str) -> Result<NotionPage> {
         let page = cache().load_item::<Page>(id)?;
-
-        // Create empty page: no content, no children.
-        // Insert new url into url map.
-        // Call migrate_page all all children recursively.
-        // When done, rewrite content with urls and update the page object in Notion.
 
         let mut properties = properties_from_nuclino(&page);
 
@@ -95,7 +95,7 @@ impl Migrator {
         }
 
         // Now we migrate the content for this item, because the url map will now
-        // let us rewrite the urls. I think. Probably. Who knows.
+        // let us rewrite the urls.
         let migrated = match page {
             Page::Item(item) => self.migrate_item(&item, parent, properties).await?,
             Page::Collection(collection) => self.migrate_collection(&collection, parent, properties).await?,
@@ -112,8 +112,11 @@ impl Migrator {
         let parent = Parent::PageId {
             page_id: parent_id.to_string(),
         };
-        // TODO remap any urls in the content that are found in our url map
-        let children = item.content().map(|content| md2notion::convert(content.as_str()));
+        let children = item.content().map(|content| {
+            // rewrite internal urls...
+            let remapped = self.remap(content);
+            md2notion::convert(remapped.as_str())
+        });
         let new_page_req = CreateAPageRequest {
             parent,
             icon: None,
@@ -125,10 +128,18 @@ impl Migrator {
         urlmap().insert(item.url().to_string(), notion_page.url.clone());
 
         let _meta = item.content_meta();
-        // deal with item_ids
-        // deal with file_ids
+        // TODO deal with item_ids
+        // TODO deal with file_ids
 
         todo!()
+    }
+
+    /// Rewrite any urls to nuclino content to their new nuclino homes.
+    fn remap(&self, input: &String) -> String {
+        // TODO This is insufficient
+        urlmap()
+            .iter()
+            .fold(input.clone(), |current, (nuc, not)| current.replace(nuc, not))
     }
 
     async fn migrate_collection(
@@ -180,7 +191,8 @@ impl Migrator {
     }
 
     async fn look_up_user(&self, _nuclino_id: &Uuid) -> Option<NotionUser> {
-        todo!()
+        // TODO actually do a lookup here
+        None
     }
 }
 

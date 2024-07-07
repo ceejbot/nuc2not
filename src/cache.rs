@@ -19,19 +19,18 @@ static CACHE_BASE: &str = ".cache";
 
 pub struct Cache {
     root: String,
-    name: String,
     nuclino: nuclino_rs::Client,
     min_delay: u64, // not usize
     cached: HashSet<Uuid>,
 }
 
 impl Cache {
-    pub fn new(name: String, apikey: String, args: &Args) -> Result<Self> {
+    pub fn new(apikey: String, args: &Args) -> Result<Self> {
         let nuclino = nuclino_rs::Client::create(apikey.as_str(), None);
+        let name = std::env::var("CACHE_NAME").unwrap_or("generic".to_string());
         let root = format!("{CACHE_BASE}/{}", slugify(name.clone()));
         let rootstr = root.as_str();
-        let metadata = std::fs::metadata(rootstr).into_diagnostic()?;
-        let cached = if metadata.is_dir() {
+        let cached = if std::path::Path::new(rootstr).exists() {
             let idset: HashSet<Uuid> = std::fs::read_dir(rootstr)
                 .into_diagnostic()?
                 .filter_map(|xs| {
@@ -58,7 +57,6 @@ impl Cache {
 
         Ok(Self {
             root,
-            name,
             nuclino,
             min_delay: args.wait,
             cached,
@@ -91,6 +89,7 @@ impl Cache {
             self.load_item(id)
         } else {
             self.do_delay();
+            println!("fetching {} id={id}", T::slug());
             T::fetch(&self.nuclino, id).map(|xs| *xs)
         }
     }
@@ -110,8 +109,11 @@ impl Cache {
     where
         T: Fetchable + Cacheable,
     {
-        item.save(self.file_path(T::slug(), id))?;
-        self.cached.insert(*id);
+        if !self.cached.contains(id) {
+            println!("saving {} id={id}", T::slug());
+            item.save(self.file_path(T::slug(), id))?;
+            self.cached.insert(*id);
+        }
         Ok(())
     }
 

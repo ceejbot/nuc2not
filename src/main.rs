@@ -42,7 +42,8 @@ async fn main() -> Result<()> {
     let client = nuclino_rs::Client::create(nuclino_key.as_str(), None);
     let workspaces = client.workspace_list(None, None).into_diagnostic()?.to_vec();
 
-    let names: Vec<String> = workspaces.iter().map(|space| space.name().to_string()).collect();
+    let mut names: Vec<String> = workspaces.iter().map(|space| space.name().to_string()).collect();
+    names.sort();
     let fzf = Fzf::builder()
         .border(fzf_wrapped::Border::Rounded)
         .border_label("Select a workspace to migrate")
@@ -58,7 +59,7 @@ async fn main() -> Result<()> {
         exit(1);
     };
 
-    let mut cache = Cache::new("nuclino_team_name".to_string(), nuclino_key, &args)?;
+    let mut cache = Cache::new(nuclino_key, &args)?;
 
     println!("Migrating the {} workspace...", to_migrate.blue());
     if args.populate {
