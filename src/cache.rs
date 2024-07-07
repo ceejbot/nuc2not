@@ -2,22 +2,26 @@
 
 use std::collections::HashSet;
 use std::fmt::Display;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use miette::{IntoDiagnostic, Result};
 use nuclino_rs::{File, Item, Page, User, Uuid, Workspace};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use slug::slugify;
 
 use crate::Args;
+
+static WAIT_UNTIL: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now()));
 
 static CACHE_BASE: &str = ".cache";
 
 pub struct Cache {
     root: String,
     name: String,
-    apikey: String,
     nuclino: nuclino_rs::Client,
-    min_delay: usize,
+    min_delay: u64, // not usize
     cached: HashSet<Uuid>,
 }
 
@@ -32,21 +36,17 @@ impl Cache {
                 .into_diagnostic()?
                 .filter_map(|xs| {
                     if let Ok(fname) = xs {
-                        if fname.file_name().is_ascii() {
-                            if let Some(idstr) = fname.file_name().to_string_lossy().split('_').last() {
-                                if let Ok(id) = Uuid::try_from(idstr) {
-                                    return Some(id);
-                                } else {
-                                    return None;
-                                }
+                        if let Some(idstr) = fname.file_name().to_string_lossy().split('_').last() {
+                            if let Ok(id) = Uuid::try_from(idstr) {
+                                Some(id)
                             } else {
-                                return None;
+                                None
                             }
                         } else {
-                            return None;
+                            None
                         }
                     } else {
-                        return None;
+                        None
                     }
                 })
                 .collect();
@@ -59,7 +59,6 @@ impl Cache {
         Ok(Self {
             root,
             name,
-            apikey,
             nuclino,
             min_delay: args.wait,
             cached,
@@ -76,11 +75,6 @@ impl Cache {
         format!("{}/{slug}_{id}", self.root)
     }
 
-    pub fn load_content_map(&mut self) {
-        // read all ids from file names in root
-        todo!()
-    }
-
     pub fn load_item<T>(&self, id: &Uuid) -> Result<T>
     where
         T: Cacheable + Fetchable,
@@ -91,10 +85,25 @@ impl Cache {
 
     fn fetch_item<T>(&self, id: &Uuid) -> Result<T>
     where
-        T: Fetchable,
+        T: Fetchable + Cacheable,
     {
-        // TODO bottleneck for request throttling
-        T::fetch(&self.nuclino, id).map(|xs| *xs)
+        if self.cached.contains(id) {
+            self.load_item(id)
+        } else {
+            self.do_delay();
+            T::fetch(&self.nuclino, id).map(|xs| *xs)
+        }
+    }
+
+    /// Doing our delay between requests to Nuclino to deal with their rate limiting.
+    fn do_delay(&self) {
+        let mut when = WAIT_UNTIL.lock().expect("well, that was surprising");
+        let now = Instant::now();
+        if now < *when {
+            let delta = *when - now;
+            std::thread::sleep(delta);
+        }
+        *when = Instant::now() + Duration::from_millis(self.min_delay);
     }
 
     fn save_item<T>(&mut self, item: &T, id: &Uuid) -> Result<()>

@@ -22,7 +22,7 @@ pub struct Args {
     populate: bool,
     /// How many milliseconds to wait between Nuclino requests.
     #[clap(long, short, global = true, default_value = "500")]
-    wait: usize,
+    wait: u64,
     /// An optional parent page for the imported items. If not provided, the tool won't
     /// try migrate pages to Notion.
     parent: Option<String>,
@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
     if let Some(parent) = args.parent {
         println!("Doing migration…");
         let migrator = migrator::Migrator::new(notion_key, parent)?;
-        migrator.migrate(cache, &found).await?;
+        migrator.migrate(cache, found).await?;
     }
 
     Ok(())
