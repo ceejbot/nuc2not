@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
-use chrono::{DateTime, Utc};
 use futures::stream::{self, StreamExt};
 use miette::{IntoDiagnostic, Result};
 use notion_client::endpoints::blocks::append::request::AppendBlockChildrenRequest;
@@ -207,23 +206,22 @@ pub fn properties_from_nuclino(page: &Page) -> BTreeMap<String, PageProperty> {
         },
     );
 
+    /*
     let created_time: DateTime<Utc> = page.created().parse().unwrap_or_else(|_| Utc::now());
     properties.insert(
         "created_time".to_string(),
         PageProperty::CreatedTime { id: None, created_time },
     );
-    let last_edited_time = match page.modified().parse::<DateTime<Utc>>() {
-        Ok(v) => Some(v),
-        Err(_) => None,
-    };
-    properties.insert(
-        "last_edited_time".to_string(),
-        PageProperty::LastEditedTime {
-            id: None,
-            last_edited_time,
-        },
-    );
-
+    if let Ok(last_edited_time) = page.modified().parse::<DateTime<Utc>>() {
+        properties.insert(
+            "last_edited_time".to_string(),
+            PageProperty::LastEditedTime {
+                id: None,
+                last_edited_time: Some(last_edited_time),
+            },
+        );
+    }
+    */
     properties
 }
 
