@@ -18,6 +18,7 @@ static WAIT_UNTIL: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now()
 
 static CACHE_BASE: &str = ".cache";
 
+#[derive(Debug)]
 pub struct Cache {
     root: String,
     nuclino: nuclino_rs::Client,

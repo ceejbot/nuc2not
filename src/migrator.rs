@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
 use futures::stream::{self, StreamExt};
-use miette::{IntoDiagnostic, Result};
+use miette::{miette, IntoDiagnostic, Result};
 use notion_client::endpoints::blocks::append::request::AppendBlockChildrenRequest;
 use notion_client::endpoints::pages::create::request::CreateAPageRequest;
 use notion_client::endpoints::Client;
@@ -16,6 +16,7 @@ use notion_client::objects::user::User as NotionUser;
 use nuclino_rs::{Collection, Item, Page, Uuid, Workspace};
 use once_cell::sync::{Lazy, OnceCell};
 
+use crate::convert::convert;
 use crate::Cache;
 
 static URL_MAP: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -108,29 +109,17 @@ impl Migrator {
         parent_id: &str,
         properties: BTreeMap<String, PageProperty>,
     ) -> Result<NotionPage> {
-        let parent = Parent::PageId {
-            page_id: parent_id.to_string(),
-        };
-        let children = item.content().map(|content| {
-            // rewrite internal urls...
+        if let Some(content) = item.content() {
             let remapped = self.remap(content);
-            md2notion::convert(remapped.as_str())
-        });
-        let new_page_req = CreateAPageRequest {
-            parent,
-            icon: None,
-            cover: None,
-            properties,
-            children,
-        };
-        let notion_page = self.notion.pages.create_a_page(new_page_req).await.into_diagnostic()?;
-        urlmap().insert(item.url().to_string(), notion_page.url.clone());
-
-        let _meta = item.content_meta();
-        // TODO deal with item_ids
-        // TODO deal with file_ids
-
-        todo!()
+            let notion_page = convert(&self.notion, remapped.as_str(), parent_id, properties).await?;
+            urlmap().insert(item.url().to_string(), notion_page.url.clone());
+            let _meta = item.content_meta();
+            // TODO deal with item_ids
+            // TODO deal with file_ids
+            Ok(notion_page)
+        } else {
+            Err(miette!("page had no content; skipping"))
+        }
     }
 
     /// Rewrite any urls to nuclino content to their new nuclino homes.

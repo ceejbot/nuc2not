@@ -4,6 +4,7 @@
 #![warn(rust_2018_idioms, trivial_casts)]
 
 mod cache;
+mod convert;
 mod migrator;
 
 use std::process::exit;
