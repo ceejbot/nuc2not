@@ -58,6 +58,50 @@ mod tests {
     }
 
     #[test]
+    fn nested_lists() {
+        let input = include_str!("../fixtures/nested_lists.md");
+        let blocks = convert(input);
+        assert_eq!(blocks.len(), 3);
+        let first_item = match &blocks[0].block_type {
+            BlockType::BulletedListItem { bulleted_list_item } => bulleted_list_item,
+            _ => {
+                panic!("expected a bulleted list item");
+            }
+        };
+        let sublist_1 = first_item
+            .children
+            .as_ref()
+            .expect("first list item should have a sublist");
+        // First child is a paragraph block, aka the list item content.
+        // Second child is a nested list.
+        let sublist_1_first = match &sublist_1[1].block_type {
+            BlockType::BulletedListItem { bulleted_list_item } => bulleted_list_item,
+            _ => {
+                panic!("expected a bulleted list item");
+            }
+        };
+        assert!(sublist_1_first.children.is_some());
+        let sublist_2 = sublist_1_first
+            .children
+            .as_ref()
+            .expect("this list item should have children");
+        assert_eq!(sublist_2.len(), 3);
+        // Same for this next list: paragraph, then a nested list.
+        let sublist_2_second = match &sublist_2[1].block_type {
+            BlockType::BulletedListItem { bulleted_list_item } => bulleted_list_item,
+            _ => {
+                panic!("expected a bulleted list item");
+            }
+        };
+        assert!(sublist_2_second.children.is_some());
+        let sublist_3 = sublist_2_second
+            .children
+            .as_ref()
+            .expect("this list item should have children");
+        assert_eq!(sublist_3.len(), 3);
+    }
+
+    #[test]
     fn headers() {
         let input = include_str!("../fixtures/headers_and_grafs.md");
         let blocks = convert(input);
