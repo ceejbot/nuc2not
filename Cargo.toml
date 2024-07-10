@@ -24,3 +24,6 @@ slug = "0.1.5"
 tempfile = "3.10.1"
 tokio = { version = "1.38.0", features = ["full"] }
 tokio-stream = "0.1.15"
+
+[dev-dependencies]
+anyhow = "1.0.86"

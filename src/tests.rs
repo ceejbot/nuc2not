@@ -1,24 +1,19 @@
 #[cfg(test)]
 mod tests {
-    use crate::convert::*;
     use notion_client::objects::block::*;
-    use notion_client::objects::emoji::Emoji;
-    use notion_client::objects::file::{ExternalFile, File};
-    use notion_client::objects::page::{Page as NotionPage, PageProperty};
-    use notion_client::objects::parent::Parent;
-    use notion_client::objects::rich_text::{Annotations, Equation, Link, RichText, Text};
+    use nuc2not::convert;
 
     #[derive(Debug, Clone)]
     struct MockClient {
         // todo
     }
 
-    #[tokio::test]
-    async fn rich_text() {
+    #[test]
+    fn rich_text() {
         let input = "This _markdown_ file has *only* some `text` styles in it, ~not much~ nothing more.";
-        let result = convert(input).await;
+        let result = convert(input);
         assert_eq!(result.len(), 1);
-        let block = result.first().expect("we expect one block");
+        let block = result.first().expect("we really expected a paragraph here");
         let paragraph = match &block.block_type {
             BlockType::Paragraph { paragraph } => paragraph,
             _ => {
@@ -29,11 +24,11 @@ mod tests {
         assert_eq!(paragraph.rich_text.len(), 9);
     }
 
-    #[tokio::test]
-    async fn bulleted_list() {
+    #[test]
+    fn bulleted_list() {
         let input = include_str!("../fixtures/bulleted_list.md");
-        let result = convert(input).await.expect("page should be created");
-        assert_eq!(result.children.len(), 4);
+        let result = convert(input);
+        assert_eq!(result.len(), 4);
         result.iter().for_each(|xs| {
             let _item = match &xs.block_type {
                 BlockType::BulletedListItem { bulleted_list_item } => bulleted_list_item,

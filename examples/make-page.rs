@@ -4,19 +4,19 @@
 
 use std::collections::BTreeMap;
 
-use md2notion::convert;
 use notion_client::endpoints::pages::create::request::CreateAPageRequest;
 use notion_client::objects::page::PageProperty;
 use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::{RichText, Text};
+use nuc2not::convert;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ignored = dotenvy::dotenv()?;
-    let notion_key = std::env::var("NOTION_API_KEY")
-        .expect("You must provide a Notion api key in the env var NOTION_API_KEY.");
-    let parent_id = std::env::var("NOTION_PARENT")
-        .expect("You must provide a Notion parent page id in the env var NOTION_PARENT.");
+    let notion_key =
+        std::env::var("NOTION_API_KEY").expect("You must provide a Notion api key in the env var NOTION_API_KEY.");
+    let parent_id =
+        std::env::var("NOTION_PARENT").expect("You must provide a Notion parent page id in the env var NOTION_PARENT.");
 
     let client = notion_client::endpoints::Client::new(notion_key, None)?;
 

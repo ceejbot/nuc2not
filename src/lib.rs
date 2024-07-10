@@ -15,13 +15,13 @@ use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::{Annotations, Equation, Link, RichText, Text};
 
 /// Convert a string slice containing Markdown into a vector of Notion document blocks.
-pub async fn convert(
+pub async fn create_page(
     client: &Client,
     input: &str,
     parent: &str,
     properties: BTreeMap<String, PageProperty>,
 ) -> Result<NotionPage> {
-    let blocks = markdown_to_blocks(input);
+    let blocks = convert(input);
 
     if !blocks.is_empty() {
         // restructuring starts here.
@@ -46,7 +46,7 @@ pub async fn convert(
     }
 }
 
-pub fn markdown_to_blocks(input: &str) -> Vec<Block> {
+pub fn convert(input: &str) -> Vec<Block> {
     // This function is infallible with the default options.
     let Ok(tree) = to_mdast(input, &ParseOptions::gfm()) else {
         return Vec::new();

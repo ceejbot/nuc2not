@@ -16,8 +16,8 @@ use notion_client::objects::user::User as NotionUser;
 use nuclino_rs::{Collection, Item, Page, Uuid, Workspace};
 use once_cell::sync::{Lazy, OnceCell};
 
-use crate::convert::convert;
 use crate::Cache;
+use nuc2not::create_page;
 
 static URL_MAP: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -114,7 +114,7 @@ impl Migrator {
     ) -> Result<NotionPage> {
         if let Some(content) = item.content() {
             let remapped = self.remap(content);
-            let notion_page = convert(&self.notion, remapped.as_str(), parent_id, properties).await?;
+            let notion_page = create_page(&self.notion, remapped.as_str(), parent_id, properties).await?;
             urlmap().insert(item.url().to_string(), notion_page.url.clone());
             let _meta = item.content_meta();
             // TODO deal with item_ids
@@ -126,11 +126,11 @@ impl Migrator {
     }
 
     /// Rewrite any urls to nuclino content to their new nuclino homes.
-    fn remap(&self, input: &String) -> String {
+    fn remap(&self, input: &str) -> String {
         // TODO This is insufficient
         urlmap()
             .iter()
-            .fold(input.clone(), |current, (nuc, not)| current.replace(nuc, not))
+            .fold(input.to_owned(), |current, (nuc, not)| current.replace(nuc, not))
     }
 
     async fn migrate_collection(
