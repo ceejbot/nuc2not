@@ -30,9 +30,12 @@ pub fn urlmap() -> std::sync::MutexGuard<'static, HashMap<String, String>> {
 static CACHE: OnceCell<Cache> = OnceCell::new();
 
 fn cache() -> &'static Cache {
-    CACHE.get().expect("cannot call migration functions directly")
+    CACHE
+        .get()
+        .expect("runtime error: migrator cannot access its cache object; exiting")
 }
 
+#[derive(Debug, Clone)]
 pub struct Migrator {
     notion: Client,
     parent: String,

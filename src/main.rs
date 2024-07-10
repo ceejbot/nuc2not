@@ -6,6 +6,7 @@
 mod cache;
 mod convert;
 mod migrator;
+mod tests;
 
 use std::process::exit;
 

@@ -21,12 +21,38 @@ pub async fn convert(
     parent: &str,
     properties: BTreeMap<String, PageProperty>,
 ) -> Result<NotionPage> {
+    let blocks = markdown_to_blocks(input);
+
+    if !blocks.is_empty() {
+        // restructuring starts here.
+        let parent = Parent::PageId {
+            page_id: parent.to_string(),
+        };
+
+        // Here we look for nesting in the children and break apart the request into sub-chunks if we need to.
+
+        let new_page_req = CreateAPageRequest {
+            parent,
+            icon: None,
+            cover: None,
+            properties: properties.clone(),
+            children: Some(blocks), // TODO this is where the change has to be
+        };
+        let notion_page = client.pages.create_a_page(new_page_req).await.into_diagnostic()?;
+
+        Ok(notion_page)
+    } else {
+        Err(miette!("Markdown AST has no children; is the markdown file empty?"))
+    }
+}
+
+pub fn markdown_to_blocks(input: &str) -> Vec<Block> {
     // This function is infallible with the default options.
     let Ok(tree) = to_mdast(input, &ParseOptions::gfm()) else {
-        return Err(miette!("the infallible function has failed?"));
+        return Vec::new();
     };
-    let mut state = State::new(client, parent.to_string(), properties.clone());
-    state.render(tree).await
+    let mut state = State::new();
+    state.render(tree)
 }
 
 #[derive(Debug, Clone)]
@@ -39,65 +65,27 @@ enum ListVariation {
 // We need to track a little state when we're rendering lists, which can be nested.
 #[derive(Debug, Clone)]
 struct State {
-    notion: Client,
-    parent: String,
     list: ListVariation,
     ordered_start: u32,
     links: HashMap<String, String>,
     images: HashMap<String, mdast::Image>,
-    nesting: u8,
-    properties: BTreeMap<String, PageProperty>,
 }
 
 impl State {
-    pub fn new(notion: &Client, parent: String, properties: BTreeMap<String, PageProperty>) -> State {
+    pub fn new() -> State {
         State {
-            notion: notion.clone(),
-            parent,
             list: ListVariation::None,
             ordered_start: 1,
             links: HashMap::new(),
             images: HashMap::new(),
-            nesting: 0,
-            properties,
         }
     }
 
-    fn from(other: &State) -> State {
-        State {
-            notion: other.notion.clone(),
-            parent: other.parent.clone(),
-            list: other.list.clone(),
-            ordered_start: 1,
-            links: other.links.clone(),
-            images: other.images.clone(),
-            nesting: other.nesting,
-            properties: other.properties.clone(),
-        }
-    }
-
-    pub async fn render(&mut self, tree: Node) -> Result<NotionPage> {
+    pub fn render(&mut self, tree: Node) -> Vec<Block> {
         if let Some(children) = tree.children() {
-            // restructuring starts here.
-            let parent = Parent::PageId {
-                page_id: self.parent.clone(),
-            };
-
-            let children = self.render_nodes(children);
-            // Here we look for nesting in the children and break apart the request into sub-chunks if we need to.
-
-            let new_page_req = CreateAPageRequest {
-                parent,
-                icon: None,
-                cover: None,
-                properties: self.properties.clone(),
-                children: Some(children), // TODO this is where the change has to be
-            };
-            let notion_page = self.notion.pages.create_a_page(new_page_req).await.into_diagnostic()?;
-
-            Ok(notion_page)
+            self.render_nodes(children)
         } else {
-            Err(miette!("Markdown AST has no children; is the markdown file empty?"))
+            Vec::new()
         }
     }
 
@@ -549,7 +537,7 @@ impl State {
     }
 
     fn begin_list(&mut self, list: &mdast::List) -> Vec<Block> {
-        let mut state = State::from(self);
+        let mut state = self.clone();
         state.list = if list.ordered {
             ListVariation::Ordered
         } else {
@@ -558,8 +546,6 @@ impl State {
         if let Some(start) = list.start {
             state.ordered_start = start;
         }
-        state.nesting = self.nesting + 1;
-        eprintln!("nesting level now {}", state.nesting);
         state.render_nodes(list.children.as_slice())
     }
 
@@ -581,36 +567,20 @@ impl State {
             .filter_map(|xs| self.render_text_node(xs))
             .collect();
 
-        if self.nesting > 2 {
-            // Markdown can nest lists arbitrarily deep. Notion will not.
-            // So, we have to mangle the structure of our documents.
-            let numbered_list_item = NumberedListItemValue {
-                rich_text,
-                color: TextColor::Default,
-                children: None,
-            };
-            let mut result = vec![Block {
-                block_type: BlockType::NumberedListItem { numbered_list_item },
-                ..Default::default()
-            }];
-            result.extend_from_slice(child_blocks.as_slice());
-            result
+        let children = if child_blocks.is_empty() {
+            None
         } else {
-            let children = if child_blocks.is_empty() {
-                None
-            } else {
-                Some(child_blocks)
-            };
-            let numbered_list_item = NumberedListItemValue {
-                rich_text,
-                color: TextColor::Default,
-                children,
-            };
-            vec![Block {
-                block_type: BlockType::NumberedListItem { numbered_list_item },
-                ..Default::default()
-            }]
-        }
+            Some(child_blocks)
+        };
+        let numbered_list_item = NumberedListItemValue {
+            rich_text,
+            color: TextColor::Default,
+            children,
+        };
+        vec![Block {
+            block_type: BlockType::NumberedListItem { numbered_list_item },
+            ..Default::default()
+        }]
     }
 
     fn rendered_bullet_li(&mut self, item: &mdast::ListItem) -> Vec<Block> {
@@ -621,32 +591,16 @@ impl State {
             .filter_map(|xs| self.render_text_node(xs))
             .collect();
 
-        if self.nesting > 2 {
-            // Markdown can nest lists arbitrarily deep. Notion will not.
-            // So, we have to mangle the structure of our documents.
-            let bulleted_list_item = BulletedListItemValue {
-                rich_text,
-                color: TextColor::Default,
-                children: None,
-            };
-            let mut result = vec![Block {
-                block_type: BlockType::BulletedListItem { bulleted_list_item },
-                ..Default::default()
-            }];
-            result.extend_from_slice(child_blocks.as_slice());
-            result
-        } else {
-            let children = Some(child_blocks);
-            let bulleted_list_item = BulletedListItemValue {
-                rich_text,
-                color: TextColor::Default,
-                children,
-            };
-            vec![Block {
-                block_type: BlockType::BulletedListItem { bulleted_list_item },
-                ..Default::default()
-            }]
-        }
+        let children = Some(child_blocks);
+        let bulleted_list_item = BulletedListItemValue {
+            rich_text,
+            color: TextColor::Default,
+            children,
+        };
+        vec![Block {
+            block_type: BlockType::BulletedListItem { bulleted_list_item },
+            ..Default::default()
+        }]
     }
 
     fn render_divider(&self, _thematic: &mdast::ThematicBreak) -> Vec<Block> {
