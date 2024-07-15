@@ -1,10 +1,12 @@
-//! Convert markdown page content to Notion page content.
+//! This library exports two reusable functions, one that converts Markdown strings
+//! to Notion page content constructs and one that creates Notion pages.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use markdown::mdast::{self, Node};
 use markdown::{to_mdast, ParseOptions};
 use miette::{miette, IntoDiagnostic, Result};
+use notion_client::endpoints::blocks::append::request::AppendBlockChildrenRequest;
 use notion_client::endpoints::pages::create::request::CreateAPageRequest;
 use notion_client::endpoints::Client;
 use notion_client::objects::block::*;
@@ -14,7 +16,12 @@ use notion_client::objects::page::{Page as NotionPage, PageProperty};
 use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::{Annotations, Equation, Link, RichText, Text};
 
-/// Convert a string slice containing Markdown into a vector of Notion document blocks.
+// The deepest level of nesting we'll allow in an API request.
+static MAX_NESTING: u8 = 2;
+
+/// Convert a string slice containing Markdown into a Notion Page in your Notion team.
+/// This function makes as many API calls as necessary to create the page with
+/// all content, working around limits on body size and nesting depth.
 pub async fn create_page(
     client: &Client,
     input: &str,
@@ -22,30 +29,116 @@ pub async fn create_page(
     properties: BTreeMap<String, PageProperty>,
 ) -> Result<NotionPage> {
     let blocks = convert(input);
-
-    if !blocks.is_empty() {
-        // restructuring starts here.
-        let parent = Parent::PageId {
-            page_id: parent.to_string(),
-        };
-
-        // Here we look for nesting in the children and break apart the request into sub-chunks if we need to.
-
-        let new_page_req = CreateAPageRequest {
-            parent,
-            icon: None,
-            cover: None,
-            properties: properties.clone(),
-            children: Some(blocks), // TODO this is where the change has to be
-        };
-        let notion_page = client.pages.create_a_page(new_page_req).await.into_diagnostic()?;
-
-        Ok(notion_page)
-    } else {
-        Err(miette!("Markdown AST has no children; is the markdown file empty?"))
+    if blocks.is_empty() {
+        // early return for readability
+        return Err(miette!("Markdown AST has no children; is the markdown file empty?"));
     }
+
+    // Here we look for nesting in the children and break apart the request into sub-chunks if we need to.
+    let subrequests: Vec<Block> = blocks
+        .iter()
+        .flat_map(|block| {
+            if let Some(replacements) = too_greedily_and_too_deep(1, block) {
+                replacements
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
+
+    let parent = Parent::PageId {
+        page_id: parent.to_string(),
+    };
+    let new_page_req = CreateAPageRequest {
+        parent,
+        icon: None,
+        cover: None,
+        properties: properties.clone(),
+        children: Some(blocks), // TODO this is where the change has to be
+    };
+    let notion_page = client.pages.create_a_page(new_page_req).await.into_diagnostic()?;
+    // now turn those block lists into requests...
+
+    /*
+    let req2 = AppendBlockChildrenRequest {
+        children: blocks,
+        after: None,
+    };
+    let response = self
+        .notion
+        .blocks
+        .append_block_children(notion_page.id.as_str(), req2)
+        .await
+        .into_diagnostic()?;
+
+    */
+
+    Ok(notion_page)
 }
 
+// what we need here is a way to connect the block we identify as the parent of the
+// list of children with the id of the block created via api call
+fn too_greedily_and_too_deep(nesting: u8, block: &Block) -> Option<Vec<Block>> {
+    // There are many block types here that we skip because we are never
+    // generating them while converting from markdown. We also skip block
+    // types that do not have a `children` field.
+    let maybe_kids = match block.block_type {
+        BlockType::BulletedListItem { ref bulleted_list_item } => &bulleted_list_item.children,
+        BlockType::NumberedListItem { ref numbered_list_item } => &numbered_list_item.children,
+        BlockType::Paragraph { ref paragraph } => &paragraph.children,
+        BlockType::Quote { ref quote } => &quote.children,
+        _ => &None,
+    };
+    let Some(children) = maybe_kids else {
+        return None;
+    };
+    if children.is_empty() {
+        return None;
+    }
+    if nesting == MAX_NESTING && !children.is_empty() {
+        let mut replacement = block.clone();
+        replacement.has_children = Some(false);
+        match block.block_type {
+            BlockType::BulletedListItem { ref bulleted_list_item } => {
+                replacement.block_type = BlockType::BulletedListItem {
+                    bulleted_list_item: bulleted_list_item.clone(),
+                };
+            }
+            BlockType::NumberedListItem { ref numbered_list_item } => {
+                replacement.block_type = BlockType::NumberedListItem {
+                    numbered_list_item: numbered_list_item.clone(),
+                };
+            }
+            BlockType::Paragraph { ref paragraph } => {
+                replacement.block_type = BlockType::Paragraph {
+                    paragraph: paragraph.clone(),
+                };
+            }
+            BlockType::Quote { ref quote } => {
+                replacement.block_type = BlockType::Quote { quote: quote.clone() };
+            }
+            _ => {}
+        }
+        return Some(vec![replacement]);
+    }
+    Some(
+        children
+            .iter()
+            .flat_map(|child| {
+                if let Some(replacements) = too_greedily_and_too_deep(nesting + 1, child) {
+                    replacements
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Convert a string slice into a vector of Notion blocks. The underpinnings of the page
+/// creation function. Unlike that function, this one makes no attempt to work with the
+/// API's limitation. It does, however, do its best to represent the Markdown data with
+/// Notion block and rich text concepts.
 pub fn convert(input: &str) -> Vec<Block> {
     // This function is infallible with the default options.
     let Ok(tree) = to_mdast(input, &ParseOptions::gfm()) else {
@@ -62,7 +155,9 @@ enum ListVariation {
     Ordered,
 }
 
-// We need to track a little state when we're rendering lists, which can be nested.
+/// We need to track a little state when we're rendering lists, which can be nested.
+/// We also need to gather up link and image reference definitions so we can substitute
+/// in the full links when we encounter them in the markup.
 #[derive(Debug, Clone)]
 struct State {
     list: ListVariation,
@@ -81,6 +176,7 @@ impl State {
         }
     }
 
+    /// The function to call to do the work. All of this is infallible.
     pub fn render(&mut self, tree: Node) -> Vec<Block> {
         if let Some(children) = tree.children() {
             self.render_nodes(children)
@@ -584,14 +680,19 @@ impl State {
     }
 
     fn rendered_bullet_li(&mut self, item: &mdast::ListItem) -> Vec<Block> {
-        let child_blocks = self.render_nodes(item.children.as_slice());
-        let rich_text: Vec<RichText> = item
-            .children
-            .iter()
-            .filter_map(|xs| self.render_text_node(xs))
-            .collect();
+        // let child_blocks = self.render_nodes(item.children.as_slice());
+        let mut children: VecDeque<Node> = VecDeque::from(item.children.clone());
+        let first = children.pop_front();
 
-        let children = Some(child_blocks);
+        let rich_text: Vec<RichText> = match item.children[0] {
+            Node::Paragraph(paragraph) => paragraph
+                .children
+                .iter()
+                .filter_map(|xs| self.render_text_node(xs))
+                .collect(),
+            _ => Vec::new(),
+        };
+
         let bulleted_list_item = BulletedListItemValue {
             rich_text,
             color: TextColor::Default,
@@ -634,5 +735,29 @@ impl State {
             block_type,
             ..Default::default()
         }]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delving() {
+        let input = include_str!("../fixtures/nested_lists.md");
+        let blocks = convert(input);
+        let replacements: Vec<Block> = blocks
+            .iter()
+            .flat_map(|block| {
+                if let Some(replacements) = too_greedily_and_too_deep(1, block) {
+                    replacements
+                } else {
+                    Vec::new()
+                }
+            })
+            .collect();
+        eprintln!("replacements length = {}", replacements.len());
+        eprintln!("{replacements:?}");
+        assert_eq!(true, false);
     }
 }

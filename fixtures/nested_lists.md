@@ -1,7 +1,7 @@
 - How deep is your love?
 	- is your love?
-		- is your love?
-			- is your love?
+		- is your love??
+			- is your love???
 				- You better ask the BeeGees.
 				- Not in falsetto for this one.
 			- Pop goes the stack.
