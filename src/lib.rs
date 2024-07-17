@@ -28,111 +28,134 @@ pub async fn create_page(
     parent: &str,
     properties: BTreeMap<String, PageProperty>,
 ) -> Result<NotionPage> {
-    let blocks = convert(input);
-    if blocks.is_empty() {
-        // early return for readability
-        return Err(miette!("Markdown AST has no children; is the markdown file empty?"));
-    }
-
-    // Here we look for nesting in the children and break apart the request into sub-chunks if we need to.
-    let subrequests: Vec<Block> = blocks
-        .iter()
-        .flat_map(|block| {
-            if let Some(replacements) = too_greedily_and_too_deep(1, block) {
-                replacements
-            } else {
-                Vec::new()
-            }
-        })
-        .collect();
-
-    let parent = Parent::PageId {
-        page_id: parent.to_string(),
-    };
-    let new_page_req = CreateAPageRequest {
-        parent,
-        icon: None,
-        cover: None,
-        properties: properties.clone(),
-        children: Some(blocks), // TODO this is where the change has to be
-    };
-    let notion_page = client.pages.create_a_page(new_page_req).await.into_diagnostic()?;
-    // now turn those block lists into requests...
-
-    /*
-    let req2 = AppendBlockChildrenRequest {
-        children: blocks,
-        after: None,
-    };
-    let response = self
-        .notion
-        .blocks
-        .append_block_children(notion_page.id.as_str(), req2)
-        .await
-        .into_diagnostic()?;
-
-    */
-
-    Ok(notion_page)
+    let maker = PageMaker::new(client, parent, properties);
+    maker.make_page(input).await
 }
 
-// what we need here is a way to connect the block we identify as the parent of the
-// list of children with the id of the block created via api call
-fn too_greedily_and_too_deep(nesting: u8, block: &Block) -> Option<Vec<Block>> {
-    // There are many block types here that we skip because we are never
-    // generating them while converting from markdown. We also skip block
-    // types that do not have a `children` field.
-    let maybe_kids = match block.block_type {
-        BlockType::BulletedListItem { ref bulleted_list_item } => &bulleted_list_item.children,
-        BlockType::NumberedListItem { ref numbered_list_item } => &numbered_list_item.children,
-        BlockType::Paragraph { ref paragraph } => &paragraph.children,
-        BlockType::Quote { ref quote } => &quote.children,
-        _ => &None,
-    };
-    let Some(children) = maybe_kids else {
-        return None;
-    };
-    if children.is_empty() {
-        return None;
-    }
-    if nesting == MAX_NESTING && !children.is_empty() {
-        let mut replacement = block.clone();
-        replacement.has_children = Some(false);
-        match block.block_type {
-            BlockType::BulletedListItem { ref bulleted_list_item } => {
-                replacement.block_type = BlockType::BulletedListItem {
-                    bulleted_list_item: bulleted_list_item.clone(),
-                };
-            }
-            BlockType::NumberedListItem { ref numbered_list_item } => {
-                replacement.block_type = BlockType::NumberedListItem {
-                    numbered_list_item: numbered_list_item.clone(),
-                };
-            }
-            BlockType::Paragraph { ref paragraph } => {
-                replacement.block_type = BlockType::Paragraph {
-                    paragraph: paragraph.clone(),
-                };
-            }
-            BlockType::Quote { ref quote } => {
-                replacement.block_type = BlockType::Quote { quote: quote.clone() };
-            }
-            _ => {}
+/// This name amused me, and I wanted to avoid passing a million arguments
+/// to some functions.
+struct PageMaker {
+    notion: Client,
+    parent: String,
+    properties: BTreeMap<String, PageProperty>,
+}
+
+impl PageMaker {
+    pub fn new(client: &Client, parent_id: &str, properties: BTreeMap<String, PageProperty>) -> Self {
+        PageMaker {
+            notion: client.clone(),
+            parent: parent_id.to_owned(),
+            properties,
         }
-        return Some(vec![replacement]);
     }
-    Some(
-        children
-            .iter()
-            .flat_map(|child| {
-                if let Some(replacements) = too_greedily_and_too_deep(nesting + 1, child) {
-                    replacements
+
+    pub async fn make_page(&self, input: &str) -> Result<NotionPage> {
+        let blocks = convert(input);
+        if blocks.is_empty() {
+            // early return for readability
+            return Err(miette!("Markdown AST has no children; is the markdown file empty?"));
+        }
+
+        let parent = Parent::PageId {
+            page_id: self.parent.clone(),
+        };
+        let new_page_req = CreateAPageRequest {
+            parent,
+            icon: None,
+            cover: None,
+            properties: self.properties.clone(),
+            children: None,
+        };
+        let notion_page = self.notion.pages.create_a_page(new_page_req).await.into_diagnostic()?;
+
+        // Now we have our first ID to hang children on!
+        let mut remaining = VecDeque::from(blocks);
+        self.append_children(notion_page.id.clone().as_str(), None, &mut remaining)
+            .await?;
+
+        Ok(notion_page)
+    }
+
+    async fn append_children(
+        &self,
+        parent_id: &str,
+        after_id: Option<String>,
+        remaining: &mut VecDeque<Block>,
+    ) -> Result<()> {
+        let after: Option<String> = after_id.clone();
+        let mut current_tranche: Vec<Block> = Vec::new(); // building the next list
+        while !remaining.is_empty() {
+            if let Some(head) = remaining.pop_front() {
+                // While the head of `remaining` has no children, push it onto the end of `blocks`
+                // for blocks with children, stop and look to see if the children violate depth limits.
+                if PageMaker::block_has_deep_children(0, &head) {
+                    // if so, hold that block and call append children on it one level at a time until we hit bottom.
+                    // This is not maximally efficient, BUT.
+                    let (copy, mut head_children) = split_block_from_children(head);
+                    current_tranche.push(copy);
+                    let created = self.do_append(parent_id, current_tranche, after.clone()).await?;
+                    // snag the id from the last block in the request, which will be head's id
+                    let head_id = if let Some(last) = created.last() {
+                        if let Some(ref id) = last.id {
+                            id.clone()
+                        } else {
+                            parent_id.to_owned()
+                        }
+                    } else {
+                        // really quite impossible, which means my structure is wrong here
+                        parent_id.to_owned()
+                    };
+                    Box::pin(self.append_children(head_id.as_str(), None, &mut head_children)).await?;
+                    current_tranche = Vec::new();
+                    // keep going with the rest of the list, now with the after-id of where we stopped
+                    Box::pin(self.append_children(parent_id, Some(head_id.clone()), remaining)).await?;
                 } else {
-                    Vec::new()
+                    current_tranche.push(head);
                 }
-            })
-            .collect(),
-    )
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn do_append(&self, parent_id: &str, children: Vec<Block>, after: Option<String>) -> Result<Vec<Block>> {
+        let append_req = AppendBlockChildrenRequest { children, after };
+        let response = self
+            .notion
+            .blocks
+            .append_block_children(parent_id, append_req)
+            .await
+            .into_diagnostic()?;
+        // response.results is a list of blocks matching the nodes we just appended
+        Ok(response.results)
+    }
+
+    fn block_has_deep_children(nesting: u8, block: &Block) -> bool {
+        let maybe_kids = match block.block_type {
+            BlockType::BulletedListItem { ref bulleted_list_item } => &bulleted_list_item.children,
+            BlockType::NumberedListItem { ref numbered_list_item } => &numbered_list_item.children,
+            BlockType::Paragraph { ref paragraph } => &paragraph.children,
+            BlockType::Quote { ref quote } => &quote.children,
+            _ => &None,
+        };
+        let Some(children) = maybe_kids else {
+            return false;
+        };
+        if children.is_empty() {
+            return false;
+        }
+        if nesting == MAX_NESTING {
+            return true;
+        }
+        if children
+            .iter()
+            .any(|child| PageMaker::block_has_deep_children(nesting + 1, child))
+        {
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Convert a string slice into a vector of Notion blocks. The underpinnings of the page
@@ -682,9 +705,20 @@ impl State {
     fn rendered_bullet_li(&mut self, item: &mdast::ListItem) -> Vec<Block> {
         // let child_blocks = self.render_nodes(item.children.as_slice());
         let mut children: VecDeque<Node> = VecDeque::from(item.children.clone());
-        let first = children.pop_front();
+        let Some(first) = children.pop_front() else {
+            // we can short-circuit. Empty list.
+            let bulleted_list_item = BulletedListItemValue {
+                rich_text: Vec::new(),
+                color: TextColor::Default,
+                children: None,
+            };
+            return vec![Block {
+                block_type: BlockType::BulletedListItem { bulleted_list_item },
+                ..Default::default()
+            }];
+        };
 
-        let rich_text: Vec<RichText> = match item.children[0] {
+        let rich_text: Vec<RichText> = match first {
             Node::Paragraph(paragraph) => paragraph
                 .children
                 .iter()
@@ -693,10 +727,11 @@ impl State {
             _ => Vec::new(),
         };
 
+        let block_kids: Vec<Block> = self.render_nodes(&Vec::from(children));
         let bulleted_list_item = BulletedListItemValue {
             rich_text,
             color: TextColor::Default,
-            children,
+            children: Some(block_kids),
         };
         vec![Block {
             block_type: BlockType::BulletedListItem { bulleted_list_item },
@@ -738,6 +773,49 @@ impl State {
     }
 }
 
+fn split_block_from_children(block: Block) -> (Block, VecDeque<Block>) {
+    // There are many block types here that we skip because we are never
+    // generating them while converting from markdown. We also skip block
+    // types that do not have a `children` field.
+    let maybe_kids = match block.block_type {
+        BlockType::BulletedListItem { ref bulleted_list_item } => &bulleted_list_item.children,
+        BlockType::NumberedListItem { ref numbered_list_item } => &numbered_list_item.children,
+        BlockType::Paragraph { ref paragraph } => &paragraph.children,
+        BlockType::Quote { ref quote } => &quote.children,
+        _ => &None,
+    };
+    let Some(children) = maybe_kids else {
+        return (block, VecDeque::new());
+    };
+    if children.is_empty() {
+        return (block, VecDeque::new());
+    }
+    let mut replacement = block.clone();
+    replacement.has_children = Some(false);
+    match block.block_type {
+        BlockType::BulletedListItem { ref bulleted_list_item } => {
+            replacement.block_type = BlockType::BulletedListItem {
+                bulleted_list_item: bulleted_list_item.clone(),
+            };
+        }
+        BlockType::NumberedListItem { ref numbered_list_item } => {
+            replacement.block_type = BlockType::NumberedListItem {
+                numbered_list_item: numbered_list_item.clone(),
+            };
+        }
+        BlockType::Paragraph { ref paragraph } => {
+            replacement.block_type = BlockType::Paragraph {
+                paragraph: paragraph.clone(),
+            };
+        }
+        BlockType::Quote { ref quote } => {
+            replacement.block_type = BlockType::Quote { quote: quote.clone() };
+        }
+        _ => {}
+    }
+    (replacement, VecDeque::from(children.clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,18 +824,89 @@ mod tests {
     fn delving() {
         let input = include_str!("../fixtures/nested_lists.md");
         let blocks = convert(input);
-        let replacements: Vec<Block> = blocks
-            .iter()
-            .flat_map(|block| {
-                if let Some(replacements) = too_greedily_and_too_deep(1, block) {
-                    replacements
-                } else {
-                    Vec::new()
-                }
-            })
-            .collect();
-        eprintln!("replacements length = {}", replacements.len());
-        eprintln!("{replacements:?}");
+        blocks.iter().for_each(|xs| {
+            debug_print(xs);
+            if PageMaker::block_has_deep_children(0, xs) {
+                eprintln!("    ^^^^ too deep!");
+            }
+        });
         assert_eq!(true, false);
+    }
+
+    fn debug_print(block: &Block) {
+        match &block.block_type {
+            BlockType::None => eprintln!("BlockType::None"),
+            BlockType::Bookmark { bookmark } => eprintln!("BlockType::Bookmark"),
+            BlockType::Breadcrumb { breadcrump } => eprintln!("BlockType::Breadcrumb"),
+            BlockType::BulletedListItem { bulleted_list_item } => {
+                eprintln!("BlockType::BulletedListItem");
+                eprintln!(
+                    "{:?}",
+                    bulleted_list_item
+                        .rich_text
+                        .iter()
+                        .map(|t| match t {
+                            RichText::Text { text, .. } => text.content.clone(),
+                            _ => "".to_string(),
+                        })
+                        .collect::<Vec<String>>()
+                        .join("")
+                );
+            }
+            BlockType::Callout { callout } => eprintln!("BlockType::Callout"),
+            BlockType::ChildDatabase { child_database } => eprintln!("BlockType::ChildDatabase"),
+            BlockType::ChildPage { child_page } => eprintln!("BlockType::ChildPage"),
+            BlockType::Code { code } => eprintln!("BlockType::Code"),
+            BlockType::ColumnList { column_list } => eprintln!("BlockType::ColumnList"),
+            BlockType::Column { column } => eprintln!("BlockType::Column"),
+            BlockType::Divider { divider } => eprintln!("BlockType::Divider"),
+            BlockType::Embed { embed } => eprintln!("BlockType::Embed"),
+            BlockType::Equation { equation } => eprintln!("BlockType::Equation"),
+            BlockType::File { file } => eprintln!("BlockType::File"),
+            BlockType::Heading1 { heading_1 } => eprintln!("BlockType::Heading1"),
+            BlockType::Heading2 { heading_2 } => eprintln!("BlockType::Heading2"),
+            BlockType::Heading3 { heading_3 } => eprintln!("BlockType::Heading3"),
+            BlockType::Image { image } => eprintln!("BlockType::Image"),
+            BlockType::LinkPreview { link_preview } => eprintln!("BlockType::LinkPreview"),
+            BlockType::NumberedListItem { numbered_list_item } => {
+                eprintln!("BlockType::NumberedListItem");
+                eprintln!(
+                    "{:?}",
+                    numbered_list_item
+                        .rich_text
+                        .iter()
+                        .map(|t| match t {
+                            RichText::Text { text, .. } => text.content.clone(),
+                            _ => "".to_string(),
+                        })
+                        .collect::<Vec<String>>()
+                        .join("")
+                );
+            }
+            BlockType::Paragraph { paragraph } => {
+                eprintln!("BlockType::Paragraph");
+                let text = paragraph
+                    .rich_text
+                    .iter()
+                    .map(|t| match t {
+                        RichText::Text { text, .. } => text.content.clone(),
+                        _ => "".to_string(),
+                    })
+                    .collect::<Vec<String>>()
+                    .join("");
+                eprintln!("{text}");
+            }
+            BlockType::Pdf { pdf } => eprintln!("BlockType::Pdf"),
+            BlockType::Quote { quote } => eprintln!("BlockType::Quote"),
+            BlockType::SyncedBlock { synced_block } => eprintln!("BlockType::SyncedBlock"),
+            BlockType::Table { table } => eprintln!("BlockType::Table"),
+            BlockType::TableOfContents { table_of_contents } => eprintln!("BlockType::TableOfContents"),
+            BlockType::TableRow { table_row } => eprintln!("BlockType::TableRow"),
+            BlockType::Template { template } => eprintln!("BlockType::Template"),
+            BlockType::ToDo { to_do } => eprintln!("BlockType::Todo"),
+            BlockType::Toggle { toggle } => eprintln!("BlockType::Toggle"),
+            BlockType::Video { video } => eprintln!("BlockType::Video"),
+            BlockType::LinkToPage { link_to_page } => eprintln!("BlockType::LinkToPage"),
+        }
     }
 }
