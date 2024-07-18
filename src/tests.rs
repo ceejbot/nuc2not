@@ -1,7 +1,90 @@
+use notion_client::objects::{
+    block::{Block, BlockType},
+    rich_text::RichText,
+};
+
+#[cfg(test)]
+pub fn debug_print(block: &Block) {
+    match &block.block_type {
+        BlockType::None => eprintln!("BlockType::None"),
+        BlockType::Bookmark { .. } => eprintln!("BlockType::Bookmark"),
+        BlockType::Breadcrumb { .. } => eprintln!("BlockType::Breadcrumb"),
+        BlockType::BulletedListItem { bulleted_list_item } => {
+            eprintln!("BlockType::BulletedListItem");
+            eprintln!(
+                "{:?}",
+                bulleted_list_item
+                    .rich_text
+                    .iter()
+                    .map(|t| match t {
+                        RichText::Text { text, .. } => text.content.clone(),
+                        _ => "".to_string(),
+                    })
+                    .collect::<Vec<String>>()
+                    .join("")
+            );
+        }
+        BlockType::Callout { .. } => eprintln!("BlockType::Callout"),
+        BlockType::ChildDatabase { .. } => eprintln!("BlockType::ChildDatabase"),
+        BlockType::ChildPage { .. } => eprintln!("BlockType::ChildPage"),
+        BlockType::Code { .. } => eprintln!("BlockType::Code"),
+        BlockType::ColumnList { .. } => eprintln!("BlockType::ColumnList"),
+        BlockType::Column { .. } => eprintln!("BlockType::Column"),
+        BlockType::Divider { .. } => eprintln!("BlockType::Divider"),
+        BlockType::Embed { .. } => eprintln!("BlockType::Embed"),
+        BlockType::Equation { .. } => eprintln!("BlockType::Equation"),
+        BlockType::File { .. } => eprintln!("BlockType::File"),
+        BlockType::Heading1 { .. } => eprintln!("BlockType::Heading1"),
+        BlockType::Heading2 { .. } => eprintln!("BlockType::Heading2"),
+        BlockType::Heading3 { .. } => eprintln!("BlockType::Heading3"),
+        BlockType::Image { .. } => eprintln!("BlockType::Image"),
+        BlockType::LinkPreview { .. } => eprintln!("BlockType::LinkPreview"),
+        BlockType::NumberedListItem { numbered_list_item } => {
+            eprintln!("BlockType::NumberedListItem");
+            eprintln!(
+                "{:?}",
+                numbered_list_item
+                    .rich_text
+                    .iter()
+                    .map(|t| match t {
+                        RichText::Text { text, .. } => text.content.clone(),
+                        _ => "".to_string(),
+                    })
+                    .collect::<Vec<String>>()
+                    .join("")
+            );
+        }
+        BlockType::Paragraph { paragraph } => {
+            eprintln!("BlockType::Paragraph");
+            let text = paragraph
+                .rich_text
+                .iter()
+                .map(|t| match t {
+                    RichText::Text { text, .. } => text.content.clone(),
+                    _ => "".to_string(),
+                })
+                .collect::<Vec<String>>()
+                .join("");
+            eprintln!("{text}");
+        }
+        BlockType::Pdf { .. } => eprintln!("BlockType::Pdf"),
+        BlockType::Quote { .. } => eprintln!("BlockType::Quote"),
+        BlockType::SyncedBlock { .. } => eprintln!("BlockType::SyncedBlock"),
+        BlockType::Table { .. } => eprintln!("BlockType::Table"),
+        BlockType::TableOfContents { .. } => eprintln!("BlockType::TableOfContents"),
+        BlockType::TableRow { .. } => eprintln!("BlockType::TableRow"),
+        BlockType::Template { .. } => eprintln!("BlockType::Template"),
+        BlockType::ToDo { .. } => eprintln!("BlockType::Todo"),
+        BlockType::Toggle { .. } => eprintln!("BlockType::Toggle"),
+        BlockType::Video { .. } => eprintln!("BlockType::Video"),
+        BlockType::LinkToPage { .. } => eprintln!("BlockType::LinkToPage"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::convert;
     use notion_client::objects::block::*;
-    use nuc2not::convert;
 
     #[derive(Debug, Clone)]
     struct MockClient {

@@ -1,6 +1,9 @@
 //! This library exports two reusable functions, one that converts Markdown strings
 //! to Notion page content constructs and one that creates Notion pages.
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use markdown::mdast::{self, Node};
@@ -17,7 +20,7 @@ use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::{Annotations, Equation, Link, RichText, Text};
 
 // The deepest level of nesting we'll allow in an API request.
-static MAX_NESTING: u8 = 2;
+static MAX_NESTING: u8 = 1;
 
 /// Convert a string slice containing Markdown into a Notion Page in your Notion team.
 /// This function makes as many API calls as necessary to create the page with
@@ -60,12 +63,13 @@ impl PageMaker {
             page_id: self.parent.clone(),
         };
         let new_page_req = CreateAPageRequest {
-            parent,
+            parent: parent.clone(),
             icon: None,
             cover: None,
             properties: self.properties.clone(),
             children: None,
         };
+
         let notion_page = self.notion.pages.create_a_page(new_page_req).await.into_diagnostic()?;
 
         // Now we have our first ID to hang children on!
@@ -80,20 +84,26 @@ impl PageMaker {
         &self,
         parent_id: &str,
         after_id: Option<String>,
-        remaining: &mut VecDeque<Block>,
+        to_be_appended: &mut VecDeque<Block>,
     ) -> Result<()> {
+        eprintln!(
+            "entering append_children({parent_id}, {after_id:?}, len={})",
+            to_be_appended.len()
+        );
         let after: Option<String> = after_id.clone();
         let mut current_tranche: Vec<Block> = Vec::new(); // building the next list
-        while !remaining.is_empty() {
-            if let Some(head) = remaining.pop_front() {
+        while !to_be_appended.is_empty() {
+            if let Some(head) = to_be_appended.pop_front() {
                 // While the head of `remaining` has no children, push it onto the end of `blocks`
                 // for blocks with children, stop and look to see if the children violate depth limits.
                 if PageMaker::block_has_deep_children(0, &head) {
                     // if so, hold that block and call append children on it one level at a time until we hit bottom.
                     // This is not maximally efficient, BUT.
-                    let (copy, mut head_children) = split_block_from_children(head);
+                    let (copy, maybe_children) = split_block_from_children(head);
                     current_tranche.push(copy);
-                    let created = self.do_append(parent_id, current_tranche, after.clone()).await?;
+                    let created = self
+                        .do_append(parent_id, current_tranche.as_slice(), after.clone())
+                        .await?;
                     // snag the id from the last block in the request, which will be head's id
                     let head_id = if let Some(last) = created.last() {
                         if let Some(ref id) = last.id {
@@ -105,20 +115,39 @@ impl PageMaker {
                         // really quite impossible, which means my structure is wrong here
                         parent_id.to_owned()
                     };
-                    Box::pin(self.append_children(head_id.as_str(), None, &mut head_children)).await?;
+                    if let Some(mut head_children) = maybe_children {
+                        eprintln!("we're adding our nested children now");
+                        Box::pin(self.append_children(head_id.as_str(), None, &mut head_children)).await?;
+                    }
                     current_tranche = Vec::new();
                     // keep going with the rest of the list, now with the after-id of where we stopped
-                    Box::pin(self.append_children(parent_id, Some(head_id.clone()), remaining)).await?;
+                    Box::pin(self.append_children(parent_id, Some(head_id.clone()), to_be_appended)).await?;
                 } else {
                     current_tranche.push(head);
                 }
             }
         }
 
+        if !current_tranche.is_empty() {
+            let _created = self
+                .do_append(parent_id, current_tranche.as_slice(), after.clone())
+                .await?;
+        }
+
         Ok(())
     }
 
-    async fn do_append(&self, parent_id: &str, children: Vec<Block>, after: Option<String>) -> Result<Vec<Block>> {
+    async fn do_append(&self, parent_id: &str, slice: &[Block], after: Option<String>) -> Result<Vec<Block>> {
+        if slice.is_empty() {
+            return Ok(Vec::new());
+        }
+        eprintln!(
+            "    doing append; parent_id={parent_id}; after_id={after:?}; children count={};",
+            slice.len()
+        );
+        let children = slice.to_vec();
+        // We're having 409 problems at the speed we're making API requests right now. It is to lol.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         let append_req = AppendBlockChildrenRequest { children, after };
         let response = self
             .notion
@@ -147,14 +176,9 @@ impl PageMaker {
         if nesting == MAX_NESTING {
             return true;
         }
-        if children
+        children
             .iter()
             .any(|child| PageMaker::block_has_deep_children(nesting + 1, child))
-        {
-            true
-        } else {
-            false
-        }
     }
 }
 
@@ -679,22 +703,34 @@ impl State {
     // TODO these two list item functions have a lot in common, you know?
 
     fn render_numbered_li(&mut self, item: &mdast::ListItem) -> Vec<Block> {
-        let child_blocks = self.render_nodes(item.children.as_slice());
-        let rich_text: Vec<RichText> = item
-            .children
-            .iter()
-            .filter_map(|xs| self.render_text_node(xs))
-            .collect();
-
-        let children = if child_blocks.is_empty() {
-            None
-        } else {
-            Some(child_blocks)
+        let mut children: VecDeque<Node> = VecDeque::from(item.children.clone());
+        let Some(first) = children.pop_front() else {
+            // we can short-circuit. Empty list.
+            let numbered_list_item = NumberedListItemValue {
+                rich_text: Vec::new(),
+                color: TextColor::Default,
+                children: None,
+            };
+            return vec![Block {
+                block_type: BlockType::NumberedListItem { numbered_list_item },
+                ..Default::default()
+            }];
         };
+
+        let rich_text: Vec<RichText> = match first {
+            Node::Paragraph(paragraph) => paragraph
+                .children
+                .iter()
+                .filter_map(|xs| self.render_text_node(xs))
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        let block_kids: Vec<Block> = self.render_nodes(&Vec::from(children));
         let numbered_list_item = NumberedListItemValue {
             rich_text,
             color: TextColor::Default,
-            children,
+            children: Some(block_kids),
         };
         vec![Block {
             block_type: BlockType::NumberedListItem { numbered_list_item },
@@ -703,7 +739,6 @@ impl State {
     }
 
     fn rendered_bullet_li(&mut self, item: &mdast::ListItem) -> Vec<Block> {
-        // let child_blocks = self.render_nodes(item.children.as_slice());
         let mut children: VecDeque<Node> = VecDeque::from(item.children.clone());
         let Some(first) = children.pop_front() else {
             // we can short-circuit. Empty list.
@@ -773,7 +808,7 @@ impl State {
     }
 }
 
-fn split_block_from_children(block: Block) -> (Block, VecDeque<Block>) {
+fn split_block_from_children(block: Block) -> (Block, Option<VecDeque<Block>>) {
     // There are many block types here that we skip because we are never
     // generating them while converting from markdown. We also skip block
     // types that do not have a `children` field.
@@ -785,128 +820,99 @@ fn split_block_from_children(block: Block) -> (Block, VecDeque<Block>) {
         _ => &None,
     };
     let Some(children) = maybe_kids else {
-        return (block, VecDeque::new());
+        return (block, None);
     };
     if children.is_empty() {
-        return (block, VecDeque::new());
+        return (block, None);
     }
     let mut replacement = block.clone();
     replacement.has_children = Some(false);
     match block.block_type {
         BlockType::BulletedListItem { ref bulleted_list_item } => {
-            replacement.block_type = BlockType::BulletedListItem {
-                bulleted_list_item: bulleted_list_item.clone(),
-            };
+            let mut bulleted_list_item = bulleted_list_item.clone();
+            bulleted_list_item.children = None;
+            replacement.block_type = BlockType::BulletedListItem { bulleted_list_item };
         }
         BlockType::NumberedListItem { ref numbered_list_item } => {
-            replacement.block_type = BlockType::NumberedListItem {
-                numbered_list_item: numbered_list_item.clone(),
-            };
+            let mut numbered_list_item = numbered_list_item.clone();
+            numbered_list_item.children = None;
+            replacement.block_type = BlockType::NumberedListItem { numbered_list_item };
         }
         BlockType::Paragraph { ref paragraph } => {
-            replacement.block_type = BlockType::Paragraph {
-                paragraph: paragraph.clone(),
-            };
+            let mut paragraph = paragraph.clone();
+            paragraph.children = None;
+            replacement.block_type = BlockType::Paragraph { paragraph };
         }
         BlockType::Quote { ref quote } => {
-            replacement.block_type = BlockType::Quote { quote: quote.clone() };
+            let mut quote = quote.clone();
+            quote.children = None;
+            replacement.block_type = BlockType::Quote { quote };
         }
         _ => {}
     }
-    (replacement, VecDeque::from(children.clone()))
+    (replacement, Some(VecDeque::from(children.clone())))
+}
+
+pub fn debug_print(_block: &Block) {
+    // no-op
 }
 
 #[cfg(test)]
-mod tests {
+mod libtest {
     use super::*;
 
     #[test]
+    #[ignore]
     fn delving() {
         let input = include_str!("../fixtures/nested_lists.md");
         let blocks = convert(input);
         blocks.iter().for_each(|xs| {
-            debug_print(xs);
+            crate::tests::debug_print(xs);
             if PageMaker::block_has_deep_children(0, xs) {
                 eprintln!("    ^^^^ too deep!");
             }
         });
-        assert_eq!(true, false);
+        // assert_eq!(true, false);
     }
 
-    fn debug_print(block: &Block) {
-        match &block.block_type {
-            BlockType::None => eprintln!("BlockType::None"),
-            BlockType::Bookmark { bookmark } => eprintln!("BlockType::Bookmark"),
-            BlockType::Breadcrumb { breadcrump } => eprintln!("BlockType::Breadcrumb"),
-            BlockType::BulletedListItem { bulleted_list_item } => {
-                eprintln!("BlockType::BulletedListItem");
-                eprintln!(
-                    "{:?}",
-                    bulleted_list_item
-                        .rich_text
-                        .iter()
-                        .map(|t| match t {
-                            RichText::Text { text, .. } => text.content.clone(),
-                            _ => "".to_string(),
-                        })
-                        .collect::<Vec<String>>()
-                        .join("")
-                );
+    /// This creates a page. Be sure you want this.
+    #[tokio::test]
+    #[ignore]
+    async fn creating_by_chunks() {
+        let _ignored = dotenvy::dotenv().unwrap();
+        let notion_key =
+            std::env::var("NOTION_API_KEY").expect("The test creating_by_chunks needs the env var NOTION_API_KEY.");
+        let notion = Client::new(notion_key, None).expect("should be able to make a client");
+        let parent =
+            std::env::var("PARENT_ID").expect("The test creating_by_chunks needs a parent page id in PARENT_ID");
+
+        let mut properties: BTreeMap<String, PageProperty> = BTreeMap::new();
+        let text = Text {
+            content: "Nested list test".to_string(),
+            link: None,
+        };
+        let title = vec![RichText::Text {
+            text,
+            annotations: None,
+            plain_text: Some("Nested list test".to_string()),
+            href: None,
+        }];
+        properties.insert("title".to_string(), PageProperty::Title { id: None, title });
+
+        let input = include_str!("../fixtures/nested_lists.md");
+        let page = create_page(&notion, input, parent.as_str(), properties)
+            .await
+            .expect("create_page() should succeed in testing");
+        assert!(!page.id.is_empty());
+        assert!(matches!(page.parent, Parent::PageId { .. }));
+        match page.parent {
+            Parent::None => {}
+            Parent::PageId { page_id } => {
+                assert_eq!(page_id, parent);
             }
-            BlockType::Callout { callout } => eprintln!("BlockType::Callout"),
-            BlockType::ChildDatabase { child_database } => eprintln!("BlockType::ChildDatabase"),
-            BlockType::ChildPage { child_page } => eprintln!("BlockType::ChildPage"),
-            BlockType::Code { code } => eprintln!("BlockType::Code"),
-            BlockType::ColumnList { column_list } => eprintln!("BlockType::ColumnList"),
-            BlockType::Column { column } => eprintln!("BlockType::Column"),
-            BlockType::Divider { divider } => eprintln!("BlockType::Divider"),
-            BlockType::Embed { embed } => eprintln!("BlockType::Embed"),
-            BlockType::Equation { equation } => eprintln!("BlockType::Equation"),
-            BlockType::File { file } => eprintln!("BlockType::File"),
-            BlockType::Heading1 { heading_1 } => eprintln!("BlockType::Heading1"),
-            BlockType::Heading2 { heading_2 } => eprintln!("BlockType::Heading2"),
-            BlockType::Heading3 { heading_3 } => eprintln!("BlockType::Heading3"),
-            BlockType::Image { image } => eprintln!("BlockType::Image"),
-            BlockType::LinkPreview { link_preview } => eprintln!("BlockType::LinkPreview"),
-            BlockType::NumberedListItem { numbered_list_item } => {
-                eprintln!("BlockType::NumberedListItem");
-                eprintln!(
-                    "{:?}",
-                    numbered_list_item
-                        .rich_text
-                        .iter()
-                        .map(|t| match t {
-                            RichText::Text { text, .. } => text.content.clone(),
-                            _ => "".to_string(),
-                        })
-                        .collect::<Vec<String>>()
-                        .join("")
-                );
-            }
-            BlockType::Paragraph { paragraph } => {
-                eprintln!("BlockType::Paragraph");
-                let text = paragraph
-                    .rich_text
-                    .iter()
-                    .map(|t| match t {
-                        RichText::Text { text, .. } => text.content.clone(),
-                        _ => "".to_string(),
-                    })
-                    .collect::<Vec<String>>()
-                    .join("");
-                eprintln!("{text}");
-            }
-            BlockType::Pdf { pdf } => eprintln!("BlockType::Pdf"),
-            BlockType::Quote { quote } => eprintln!("BlockType::Quote"),
-            BlockType::SyncedBlock { synced_block } => eprintln!("BlockType::SyncedBlock"),
-            BlockType::Table { table } => eprintln!("BlockType::Table"),
-            BlockType::TableOfContents { table_of_contents } => eprintln!("BlockType::TableOfContents"),
-            BlockType::TableRow { table_row } => eprintln!("BlockType::TableRow"),
-            BlockType::Template { template } => eprintln!("BlockType::Template"),
-            BlockType::ToDo { to_do } => eprintln!("BlockType::Todo"),
-            BlockType::Toggle { toggle } => eprintln!("BlockType::Toggle"),
-            BlockType::Video { video } => eprintln!("BlockType::Video"),
-            BlockType::LinkToPage { link_to_page } => eprintln!("BlockType::LinkToPage"),
+            Parent::BlockId { .. } => {}
+            Parent::Workspace { .. } => {}
+            Parent::DatabaseId { .. } => {}
         }
     }
 }

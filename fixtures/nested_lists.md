@@ -1,7 +1,12 @@
+# Nested list test
+
 - How deep is your love?
-	- is your love?
-		- is your love??
-			- is your love???
+	- one) is your love?
+	- two) is your love?
+		- one: is your love??
+		- two: is your love??
+			- one; is your love???
+			- two; is your love???
 				- You better ask the BeeGees.
 				- Not in falsetto for this one.
 			- Pop goes the stack.

@@ -5,7 +5,7 @@ use std::fmt::Display;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use miette::{miette, IntoDiagnostic, Result};
+use miette::{miette, Context, IntoDiagnostic, Result};
 use nuclino_rs::{File, Item, Page, User, Uuid, Workspace};
 use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
@@ -25,54 +25,55 @@ pub struct Cache {
     min_delay: u64, // not usize
     cached: HashSet<Uuid>,
     pending: HashSet<Uuid>,
+    workspace: Workspace,
 }
 
 impl Cache {
-    pub fn new(apikey: String, args: &Args) -> Result<Self> {
+    pub fn new(apikey: String, args: &Args, of_interest: &Workspace) -> Result<Self> {
         let nuclino = nuclino_rs::Client::create(apikey.as_str(), None);
         let name = std::env::var("CACHE_NAME").unwrap_or("generic".to_string());
-        let root = format!("{CACHE_BASE}/{}", slugify(name.clone()));
-        let rootstr = root.as_str();
         let pending = HashSet::new();
-        let cached = if std::path::Path::new(rootstr).exists() {
-            let idset: HashSet<Uuid> = std::fs::read_dir(rootstr)
-                .into_diagnostic()?
-                .filter_map(|xs| {
-                    if let Ok(fname) = xs {
-                        if let Some(idstr) = fname.file_name().to_string_lossy().split('_').last() {
-                            if let Ok(id) = Uuid::try_from(idstr) {
-                                Some(id)
-                            } else {
-                                None
-                            }
+        let workspace = of_interest.clone();
+
+        let root = format!("{CACHE_BASE}/{}/{}", slugify(name.clone()), slugify(workspace.name()));
+        std::fs::create_dir_all(root.as_str())
+            .into_diagnostic()
+            .context("Creating cache directory for workspace")?;
+        let idset: HashSet<Uuid> = std::fs::read_dir(root.as_str())
+            .into_diagnostic()?
+            .filter_map(|xs| {
+                if let Ok(fname) = xs {
+                    if let Some(idstr) = fname.file_name().to_string_lossy().split('_').last() {
+                        if let Ok(id) = Uuid::try_from(idstr) {
+                            Some(id)
                         } else {
                             None
                         }
                     } else {
                         None
                     }
-                })
-                .collect();
-            idset
-        } else {
-            std::fs::create_dir_all(rootstr).into_diagnostic()?;
-            HashSet::new()
-        };
-        println!("found {} items in cache", cached.len());
+                } else {
+                    None
+                }
+            })
+            .collect();
+        println!("found {} items in cache for workspace", idset.len());
 
         Ok(Self {
             root,
             nuclino,
             min_delay: args.wait,
-            cached,
+            cached: idset,
             pending,
+            workspace: workspace.clone(),
         })
     }
 
-    pub fn cache_workspace(&mut self, workspace: &Workspace) -> Result<usize> {
-        self.save_item(workspace, workspace.id())?;
-        let cached: Result<Vec<Page>, _> = workspace.children().iter().map(|id| self.cache_page(id)).collect();
-        Ok(cached?.len())
+    pub fn cache_workspace(&mut self) -> Result<usize> {
+        let oh_no = self.workspace.clone();
+        self.save_item(&oh_no, oh_no.id()).context("saving workspace")?;
+        let _cached: Result<Vec<Page>, _> = oh_no.children().iter().map(|id| self.cache_page(id)).collect();
+        Ok(self.cached.len())
     }
 
     fn file_path(&self, slug: &str, id: impl Display) -> String {
@@ -95,7 +96,7 @@ impl Cache {
             self.load_item(id)
         } else {
             self.do_delay();
-            println!("fetching {} id={id}", T::slug());
+            println!("    fetching {} id={}", T::slug().blue(), id.yellow());
             T::fetch(&self.nuclino, id).map(|xs| *xs)
         }
     }
@@ -115,9 +116,11 @@ impl Cache {
     where
         T: Fetchable + Cacheable,
     {
+        // println!("entering save_item(); in-cache={};", self.cached.contains(id));
         if !self.cached.contains(id) {
-            println!("saving {} id={id}", T::slug().green());
-            item.save(self.file_path(T::slug(), id))?;
+            //println!("    saving {} id={}", T::slug().blue(), id.green());
+            let fpath = self.file_path(T::slug(), id);
+            item.save(fpath.clone()).context(format!("saving {fpath}"))?;
             self.cached.insert(*id);
             self.pending.remove(id); // okay if it's not there
         }
@@ -129,6 +132,7 @@ impl Cache {
             return Err(miette!("Declining to fetch a page twice"));
         }
         let page = self.fetch_item::<Page>(id)?;
+        println!("    item is page '{}'", page.title().blue());
 
         let creator = self.fetch_item::<User>(page.created_by())?;
         self.save_item(&creator, creator.id())?;
@@ -156,27 +160,33 @@ impl Cache {
     }
 
     fn cache_meta(&mut self, item: &Item) -> Result<()> {
+        println!(
+            "        + mentioned pages; count={}",
+            item.content_meta().item_ids.len()
+        );
         item.content_meta().item_ids.iter().for_each(|id| {
             let _ignored = self.cache_page(id); // for now
         });
 
+        println!("        + attached files; count={}", item.content_meta().file_ids.len());
         item.content_meta().file_ids.iter().for_each(|id| {
-            let _ignored = self.cache_file(id);
+            if let Err(e) = self.cache_file(id) {
+                eprintln!("{e:?}");
+            }
         });
 
         Ok(())
     }
 
     fn cache_file(&mut self, id: &Uuid) -> Result<()> {
-        // We always need to grab fresh download info because the url
-        // expires 10 minutes after generation.
-        self.do_delay();
-        let file_info = File::fetch(&self.nuclino, id).map(|xs| *xs)?;
+        let file_info = self.fetch_item::<File>(id)?;
+        self.save_item(&file_info, file_info.id())?;
         let dlurl = file_info.download_info().url.clone();
-        println!("    downloading file {}", file_info.filename().blue());
+        println!("            downloading file data {}", file_info.filename().blue());
         let bytes = self.nuclino.download_file(dlurl.as_str()).into_diagnostic()?;
 
         let fpath = self.file_path(File::slug(), file_info.filename());
+        println!("            writing file data to {fpath}; data length={}", bytes.len());
         std::fs::write(fpath, bytes).into_diagnostic()?;
 
         Ok(())

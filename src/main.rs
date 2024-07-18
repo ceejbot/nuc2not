@@ -5,7 +5,6 @@
 
 mod cache;
 mod migrator;
-mod tests;
 
 use std::process::exit;
 
@@ -60,12 +59,13 @@ async fn main() -> Result<()> {
         exit(1);
     };
 
-    let mut cache = Cache::new(nuclino_key, &args)?;
+    let mut cache = Cache::new(nuclino_key, &args, found)?;
 
     println!("Migrating the {} workspace...", to_migrate.blue());
     if args.populate {
         println!("Populating the Nuclino cache…");
-        cache.cache_workspace(found)?;
+        let count = cache.cache_workspace()?;
+        println!("    {count} items cached");
     }
     if let Some(parent) = args.parent {
         println!("Doing migration…");

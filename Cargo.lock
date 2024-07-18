@@ -926,8 +926,6 @@ dependencies = [
 [[package]]
 name = "notion-client"
 version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "190dac56c62c755c6f031656750d248e940ede7507290b29eac077784f764c62"
 dependencies = [
  "chrono",
  "derive_builder 0.20.0",
@@ -965,9 +963,9 @@ dependencies = [
 
 [[package]]
 name = "nuclino-rs"
-version = "1.1.2"
+version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cdc61c3ceb4a65ce65d004a94adf25481a60e6d18e7142f70f8ee2bdfcefd2d"
+checksum = "1505eb28bd1130cf643a35242ae9ba6c019a72f685315256cd0c1df24599ab92"
 dependencies = [
  "serde",
  "serde_json",

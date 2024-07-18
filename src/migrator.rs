@@ -12,9 +12,9 @@ use notion_client::objects::block::{Block, BlockType, BulletedListItemValue, Tex
 use notion_client::objects::page::{Page as NotionPage, PageProperty};
 use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::{self, Annotations, RichText, Text};
-use notion_client::objects::user::User as NotionUser;
 use nuclino_rs::{Collection, Item, Page, Uuid, Workspace};
 use once_cell::sync::{Lazy, OnceCell};
+use owo_colors::OwoColorize;
 
 use crate::Cache;
 use nuc2not::create_page;
@@ -74,9 +74,11 @@ impl Migrator {
 
     async fn migrate_page(&self, id: &Uuid, parent: &str) -> Result<NotionPage> {
         let page = cache().load_item::<Page>(id)?;
+        eprintln!("Migrating page {}…", page.title().bold().green());
 
-        let mut properties = properties_from_nuclino(&page);
+        let properties = properties_from_nuclino(&page);
 
+        /*
         if let Some(creator) = self.look_up_user(page.created_by()).await {
             properties.insert(
                 "created_by".to_string(),
@@ -96,6 +98,7 @@ impl Migrator {
                 },
             );
         }
+        */
 
         // Now we migrate the content for this item, because the url map will now
         // let us rewrite the urls.
@@ -103,6 +106,7 @@ impl Migrator {
             Page::Item(item) => self.migrate_item(&item, parent, properties).await?,
             Page::Collection(collection) => self.migrate_collection(&collection, parent, properties).await?,
         };
+        println!("    page migrated.");
         Ok(migrated)
     }
 
@@ -119,6 +123,7 @@ impl Migrator {
             let _meta = item.content_meta();
             // TODO deal with item_ids
             // TODO deal with file_ids
+
             Ok(notion_page)
         } else {
             Err(miette!("page had no content; skipping"))
@@ -179,11 +184,6 @@ impl Migrator {
             .into_diagnostic()?;
         println!("{response:?}");
         Ok(notion_page.clone())
-    }
-
-    async fn look_up_user(&self, _nuclino_id: &Uuid) -> Option<NotionUser> {
-        // TODO actually do a lookup here
-        None
     }
 }
 
