@@ -19,8 +19,11 @@ use notion_client::objects::page::{Page as NotionPage, PageProperty};
 use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::{Annotations, Equation, Link, RichText, Text};
 
-// The deepest level of nesting we'll allow in an API request.
+/// The deepest level of nesting we'll allow in an API request.
 static MAX_NESTING: u8 = 1;
+
+/// Time to delay between requests
+static NOTION_DELAY_MS: u64 = 500;
 
 /// Convert a string slice containing Markdown into a Notion Page in your Notion team.
 /// This function makes as many API calls as necessary to create the page with
@@ -147,7 +150,7 @@ impl PageMaker {
         );
         let children = slice.to_vec();
         // We're having 409 problems at the speed we're making API requests right now. It is to lol.
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(NOTION_DELAY_MS)).await;
         let append_req = AppendBlockChildrenRequest { children, after };
         let response = self
             .notion
@@ -484,7 +487,7 @@ impl State {
             .filter_map(|xs| self.render_text_node(xs))
             .collect();
         let emoji = Emoji {
-            emoji: "🗒️".to_string(),
+            emoji: "🗒️".to_string()
         };
         let icon = notion_client::objects::block::Icon::Emoji(emoji);
         let callout = CalloutValue {
