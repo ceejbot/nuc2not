@@ -21,7 +21,7 @@ pub struct Args {
     #[clap(long, short, global = true)]
     populate: bool,
     /// How many milliseconds to wait between Nuclino requests.
-    #[clap(long, short, global = true, default_value = "500")]
+    #[clap(long, short, global = true, default_value = "750")]
     wait: u64,
     /// An optional parent page for the imported items. If not provided, the tool won't
     /// try migrate pages to Notion.

@@ -41,20 +41,15 @@ impl Cache {
             .context("Creating cache directory for workspace")?;
         let idset: HashSet<Uuid> = std::fs::read_dir(root.as_str())
             .into_diagnostic()?
-            .filter_map(|xs| {
-                if let Ok(fname) = xs {
-                    if let Some(idstr) = fname.file_name().to_string_lossy().split('_').last() {
-                        if let Ok(id) = Uuid::try_from(idstr) {
-                            Some(id)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+            .filter_map(|xs| match xs {
+                Ok(fname) => match fname.file_name().to_string_lossy().split('_').last() {
+                    Some(idstr) => match idstr.split('.').next() {
+                        Some(base) => Uuid::try_from(base).ok(),
+                        None => None,
+                    },
+                    None => None,
+                },
+                Err(_) => None,
             })
             .collect();
         println!("found {} items in cache for workspace", idset.len());
@@ -84,15 +79,15 @@ impl Cache {
     where
         T: Cacheable + Fetchable,
     {
-        let fname = format!("{}/{}_{id}", self.root, T::slug());
-        T::load(fname.as_str()).map(|xs| *xs)
+        let fpath = format!("{}.json", self.file_path(T::slug(), id));
+        T::load(fpath.as_str()).map(|xs| *xs)
     }
 
-    fn fetch_item<T>(&self, id: &Uuid) -> Result<T>
+    fn fetch_item<T>(&self, id: &Uuid, refresh: bool) -> Result<T>
     where
         T: Fetchable + Cacheable,
     {
-        if self.cached.contains(id) {
+        if !refresh && self.cached.contains(id) {
             self.load_item(id)
         } else {
             self.do_delay();
@@ -116,10 +111,8 @@ impl Cache {
     where
         T: Fetchable + Cacheable,
     {
-        // println!("entering save_item(); in-cache={};", self.cached.contains(id));
         if !self.cached.contains(id) {
-            //println!("    saving {} id={}", T::slug().blue(), id.green());
-            let fpath = self.file_path(T::slug(), id);
+            let fpath = format!("{}.json", self.file_path(T::slug(), id));
             item.save(fpath.clone()).context(format!("saving {fpath}"))?;
             self.cached.insert(*id);
             self.pending.remove(id); // okay if it's not there
@@ -131,13 +124,13 @@ impl Cache {
         if self.pending.contains(id) {
             return Err(miette!("Declining to fetch a page twice"));
         }
-        let page = self.fetch_item::<Page>(id)?;
+        let page = self.fetch_item::<Page>(id, false)?;
         println!("    item is page '{}'", page.title().blue());
 
-        let creator = self.fetch_item::<User>(page.created_by())?;
+        let creator = self.fetch_item::<User>(page.created_by(), false)?;
         self.save_item(&creator, creator.id())?;
 
-        let modifier = self.fetch_item::<User>(page.modified_by())?;
+        let modifier = self.fetch_item::<User>(page.modified_by(), false)?;
         self.save_item(&modifier, modifier.id())?;
 
         self.pending.insert(*id);
@@ -179,7 +172,7 @@ impl Cache {
     }
 
     fn cache_file(&mut self, id: &Uuid) -> Result<()> {
-        let file_info = self.fetch_item::<File>(id)?;
+        let file_info = self.fetch_item::<File>(id, true).context("fetching file info")?;
         self.save_item(&file_info, file_info.id())?;
         let dlurl = file_info.download_info().url.clone();
         println!("            downloading file data {}", file_info.filename().blue());
@@ -190,6 +183,15 @@ impl Cache {
         std::fs::write(fpath, bytes).into_diagnostic()?;
 
         Ok(())
+    }
+
+    pub fn _load_file(&self, file_info: &File) -> Result<Vec<u8>> {
+        let fpath = self.file_path(File::slug(), file_info.filename());
+        println!("file path is {}", fpath.blue());
+        let bytes = std::fs::read(fpath)
+            .into_diagnostic()
+            .context("loading file path {fpath}")?;
+        Ok(bytes)
     }
 }
 

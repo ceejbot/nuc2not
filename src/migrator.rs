@@ -12,12 +12,12 @@ use notion_client::objects::block::{Block, BlockType, BulletedListItemValue, Tex
 use notion_client::objects::page::{Page as NotionPage, PageProperty};
 use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::{self, Annotations, RichText, Text};
+use nuc2not::create_page;
 use nuclino_rs::{Collection, Item, Page, Uuid, Workspace};
 use once_cell::sync::{Lazy, OnceCell};
 use owo_colors::OwoColorize;
 
 use crate::Cache;
-use nuc2not::create_page;
 
 static URL_MAP: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -60,7 +60,7 @@ impl Migrator {
             .iter()
             .map(|id| async { self.migrate_page(id, self.parent.as_str()).await })
             .collect();
-        let mut buffered = stream::iter(futures).buffer_unordered(3);
+        let mut buffered = stream::iter(futures).buffered(3);
         while let Some(child_result) = buffered.next().await {
             let child = child_result?;
             println!("migrated {:?}", child);
@@ -116,18 +116,39 @@ impl Migrator {
         parent_id: &str,
         properties: BTreeMap<String, PageProperty>,
     ) -> Result<NotionPage> {
-        if let Some(content) = item.content() {
-            let remapped = self.remap(content);
-            let notion_page = create_page(&self.notion, remapped.as_str(), parent_id, properties).await?;
-            urlmap().insert(item.url().to_string(), notion_page.url.clone());
-            let _meta = item.content_meta();
-            // TODO deal with item_ids
-            // TODO deal with file_ids
+        let Some(content) = item.content() else {
+            return Err(miette!("page had no content; skipping"));
+        };
 
-            Ok(notion_page)
-        } else {
-            Err(miette!("page had no content; skipping"))
-        }
+        let remapped = self.remap(content);
+        let notion_page = create_page(&self.notion, remapped.as_str(), parent_id, properties).await?;
+        urlmap().insert(item.url().to_string(), notion_page.url.clone());
+
+        let meta = item.content_meta();
+        let _yeet: Vec<nuclino_rs::File> = meta
+            .file_ids
+            .iter()
+            .filter_map(|xs| cache().load_item::<nuclino_rs::File>(xs).ok())
+            .collect();
+        /*
+                let id = notion_page.id.clone();
+                let futures: Vec<_> = infos
+                    .iter()
+                    .map(|info| async { self.migrate_file(info, &id).await })
+                    .collect();
+                let mut buffered = stream::iter(futures).buffered(3);
+                while let Some(child_result) = buffered.next().await {
+                    let _child = child_result?;
+                }
+        */
+        Ok(notion_page)
+    }
+
+    async fn _migrate_file(&self, file: &nuclino_rs::File, _parent: &str) -> Result<()> {
+        let _bytes = cache()._load_file(file);
+        // The API does not support uploading files.
+        // record scratch
+        Ok(())
     }
 
     /// Rewrite any urls to nuclino content to their new nuclino homes.

@@ -484,7 +484,7 @@ impl State {
             .filter_map(|xs| self.render_text_node(xs))
             .collect();
         let emoji = Emoji {
-            emoji: "🗒️".to_string()
+            emoji: "🗒️".to_string(),
         };
         let icon = notion_client::objects::block::Icon::Emoji(emoji);
         let callout = CalloutValue {
@@ -851,10 +851,6 @@ fn split_block_from_children(block: Block) -> (Block, Option<VecDeque<Block>>) {
         _ => {}
     }
     (replacement, Some(VecDeque::from(children.clone())))
-}
-
-pub fn debug_print(_block: &Block) {
-    // no-op
 }
 
 #[cfg(test)]

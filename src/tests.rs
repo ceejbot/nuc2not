@@ -1,7 +1,5 @@
-use notion_client::objects::{
-    block::{Block, BlockType},
-    rich_text::RichText,
-};
+use notion_client::objects::block::{Block, BlockType};
+use notion_client::objects::rich_text::RichText;
 
 #[cfg(test)]
 pub fn debug_print(block: &Block) {
@@ -83,8 +81,9 @@ pub fn debug_print(block: &Block) {
 
 #[cfg(test)]
 mod tests {
-    use crate::convert;
     use notion_client::objects::block::*;
+
+    use crate::convert;
 
     #[derive(Debug, Clone)]
     struct MockClient {
