@@ -125,20 +125,21 @@ impl Cache {
             return Err(miette!("Declining to fetch a page twice"));
         }
         let page = self.fetch_item::<Page>(id, false)?;
-        println!("    item is page '{}'", page.title().blue());
-
-        let creator = self.fetch_item::<User>(page.created_by(), false)?;
-        self.save_item(&creator, creator.id())?;
-
-        let modifier = self.fetch_item::<User>(page.modified_by(), false)?;
-        self.save_item(&modifier, modifier.id())?;
-
+        println!("        got '{}'", page.title().blue());
         self.pending.insert(*id);
+
+        if let Ok(creator) = self.fetch_item::<User>(page.created_by(), false) {
+            self.save_item(&creator, creator.id())?;
+        }
+
+        if let Ok(modifier) = self.fetch_item::<User>(page.modified_by(), false) {
+            self.save_item(&modifier, modifier.id())?;
+        }
 
         match page {
             Page::Item(ref item) => {
                 // items have content_meta
-                self.cache_meta(item)?;
+                let _ignored = self.cache_meta(item); // for now
             }
             Page::Collection(ref collection) => {
                 // collections have children
@@ -147,7 +148,12 @@ impl Cache {
                 });
             }
         }
-        self.save_item(&page, page.id())?;
+        match self.save_item(&page, page.id()) {
+            Ok(_) => {}
+            Err(e) => {
+                println!("    {} save failed: {e:?}", page.title().blue());
+            }
+        }
 
         Ok(page)
     }
@@ -172,14 +178,23 @@ impl Cache {
     }
 
     fn cache_file(&mut self, id: &Uuid) -> Result<()> {
-        let file_info = self.fetch_item::<File>(id, true).context("fetching file info")?;
+        let file_info = self.fetch_item::<File>(id, false).context("load file info from disk")?;
+
+        let fpath = self.file_path(File::slug(), file_info.filename());
+        if std::path::PathBuf::from(fpath).exists() {
+            return Ok(());
+        }
+
+        let file_info = self
+            .fetch_item::<File>(id, true)
+            .context("fetching file info from network")?;
         self.save_item(&file_info, file_info.id())?;
         let dlurl = file_info.download_info().url.clone();
-        println!("            downloading file data {}", file_info.filename().blue());
+        // println!("            downloading file data {}", file_info.filename().blue());
         let bytes = self.nuclino.download_file(dlurl.as_str()).into_diagnostic()?;
 
         let fpath = self.file_path(File::slug(), file_info.filename());
-        println!("            writing file data to {fpath}; data length={}", bytes.len());
+        println!("            {}; data length={}", fpath.blue(), bytes.len());
         std::fs::write(fpath, bytes).into_diagnostic()?;
 
         Ok(())

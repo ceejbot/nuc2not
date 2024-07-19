@@ -5,13 +5,11 @@ use std::sync::Mutex;
 
 use futures::stream::{self, StreamExt};
 use miette::{miette, IntoDiagnostic, Result};
-use notion_client::endpoints::blocks::append::request::AppendBlockChildrenRequest;
 use notion_client::endpoints::pages::create::request::CreateAPageRequest;
 use notion_client::endpoints::Client;
-use notion_client::objects::block::{Block, BlockType, BulletedListItemValue, TextColor};
 use notion_client::objects::page::{Page as NotionPage, PageProperty};
 use notion_client::objects::parent::Parent;
-use notion_client::objects::rich_text::{self, Annotations, RichText, Text};
+use notion_client::objects::rich_text::{RichText, Text};
 use nuc2not::create_page;
 use nuclino_rs::{Collection, Item, Page, Uuid, Workspace};
 use once_cell::sync::{Lazy, OnceCell};
@@ -60,10 +58,16 @@ impl Migrator {
             .iter()
             .map(|id| async { self.migrate_page(id, self.parent.as_str()).await })
             .collect();
-        let mut buffered = stream::iter(futures).buffered(3);
+        let mut buffered = stream::iter(futures).buffered(2);
         while let Some(child_result) = buffered.next().await {
-            let child = child_result?;
-            println!("migrated {:?}", child);
+            match child_result {
+                Ok(_) => {
+                    // no-op
+                }
+                Err(_) => {
+                    // should log it
+                }
+            }
         }
 
         // emit some info
@@ -75,38 +79,14 @@ impl Migrator {
     async fn migrate_page(&self, id: &Uuid, parent: &str) -> Result<NotionPage> {
         let page = cache().load_item::<Page>(id)?;
         eprintln!("Migrating page {}…", page.title().bold().green());
-
         let properties = properties_from_nuclino(&page);
-
-        /*
-        if let Some(creator) = self.look_up_user(page.created_by()).await {
-            properties.insert(
-                "created_by".to_string(),
-                PageProperty::CreatedBy {
-                    id: None,
-                    created_by: creator,
-                },
-            );
-        }
-
-        if let Some(modifier) = self.look_up_user(page.modified_by()).await {
-            properties.insert(
-                "edited_by".to_string(),
-                PageProperty::LastEditedBy {
-                    id: None,
-                    last_edited_by: modifier,
-                },
-            );
-        }
-        */
-
         // Now we migrate the content for this item, because the url map will now
         // let us rewrite the urls.
         let migrated = match page {
-            Page::Item(item) => self.migrate_item(&item, parent, properties).await?,
-            Page::Collection(collection) => self.migrate_collection(&collection, parent, properties).await?,
+            Page::Item(ref item) => self.migrate_item(item, parent, properties).await?,
+            Page::Collection(ref collection) => self.migrate_collection(collection, parent, properties).await?,
         };
-        println!("    page migrated.");
+        println!("    {} migrated.", page.title().bold().green());
         Ok(migrated)
     }
 
@@ -136,7 +116,7 @@ impl Migrator {
                     .iter()
                     .map(|info| async { self.migrate_file(info, &id).await })
                     .collect();
-                let mut buffered = stream::iter(futures).buffered(3);
+                let mut buffered = stream::iter(futures).buffered(2);
                 while let Some(child_result) = buffered.next().await {
                     let _child = child_result?;
                 }
@@ -175,7 +155,8 @@ impl Migrator {
             properties,
             children: None,
         };
-        let notion_page = self.notion.pages.create_a_page(new_page_req).await.into_diagnostic()?;
+
+        let notion_page = nuc2not::do_create(&self.notion, &new_page_req, 0).await?;
         urlmap().insert(collection.url().to_string(), notion_page.url.clone());
 
         let mut subpages: Vec<NotionPage> = Vec::new();
@@ -190,20 +171,6 @@ impl Migrator {
             subpages.push(child);
         }
 
-        // Now we make a bulleted list of links to the sub-pages that looks similar to the Nuclino collection,
-        // and update our page with it.
-        let blocks: Vec<Block> = subpages.iter().map(make_link_block).collect();
-        let req2 = AppendBlockChildrenRequest {
-            children: blocks,
-            after: None,
-        };
-        let response = self
-            .notion
-            .blocks
-            .append_block_children(notion_page.id.as_str(), req2)
-            .await
-            .into_diagnostic()?;
-        println!("{response:?}");
         Ok(notion_page.clone())
     }
 }
@@ -248,35 +215,5 @@ pub fn simple_rich_text(input: &str) -> RichText {
         annotations: None,
         plain_text: None,
         href: None,
-    }
-}
-
-fn make_link_block(link_to: &NotionPage) -> Block {
-    let title = if let Some(PageProperty::Title { title, .. }) = link_to.properties.get("title") {
-        title
-            .iter()
-            .filter_map(|t| t.plain_text())
-            .collect::<Vec<String>>()
-            .join(" ")
-    } else {
-        link_to.url.clone()
-    };
-    let annotations = Annotations::default();
-    let page = rich_text::PageMention { id: link_to.id.clone() };
-    let mention = rich_text::Mention::Page { page };
-    let rich_text = RichText::Mention {
-        mention,
-        annotations,
-        plain_text: title,
-        href: Some(link_to.url.clone()),
-    };
-    let bulleted_list_item = BulletedListItemValue {
-        rich_text: vec![rich_text],
-        color: TextColor::Default,
-        children: None,
-    };
-    Block {
-        block_type: BlockType::BulletedListItem { bulleted_list_item },
-        ..Default::default()
     }
 }

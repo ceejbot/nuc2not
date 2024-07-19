@@ -1,6 +1,7 @@
 //! This library exports two reusable functions, one that converts Markdown strings
 //! to Notion page content constructs and one that creates Notion pages.
 
+mod retries;
 #[cfg(test)]
 mod tests;
 
@@ -8,8 +9,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use markdown::mdast::{self, Node};
 use markdown::{to_mdast, ParseOptions};
-use miette::{miette, IntoDiagnostic, Result};
-use notion_client::endpoints::blocks::append::request::AppendBlockChildrenRequest;
+use miette::{miette, Result};
 use notion_client::endpoints::pages::create::request::CreateAPageRequest;
 use notion_client::endpoints::Client;
 use notion_client::objects::block::*;
@@ -18,12 +18,10 @@ use notion_client::objects::file::{ExternalFile, File};
 use notion_client::objects::page::{Page as NotionPage, PageProperty};
 use notion_client::objects::parent::Parent;
 use notion_client::objects::rich_text::{Annotations, Equation, Link, RichText, Text};
+pub use retries::{do_append, do_create};
 
 /// The deepest level of nesting we'll allow in an API request.
 static MAX_NESTING: u8 = 1;
-
-/// Time to delay between requests
-static NOTION_DELAY_MS: u64 = 500;
 
 /// Convert a string slice containing Markdown into a Notion Page in your Notion team.
 /// This function makes as many API calls as necessary to create the page with
@@ -73,7 +71,7 @@ impl PageMaker {
             children: None,
         };
 
-        let notion_page = self.notion.pages.create_a_page(new_page_req).await.into_diagnostic()?;
+        let notion_page = do_create(&self.notion, &new_page_req, 0).await?;
 
         // Now we have our first ID to hang children on!
         let mut remaining = VecDeque::from(blocks);
@@ -93,7 +91,7 @@ impl PageMaker {
             "entering append_children({parent_id}, {after_id:?}, len={})",
             to_be_appended.len()
         );
-        let after: Option<String> = after_id.clone();
+        let mut after: Option<String> = after_id.clone();
         let mut current_tranche: Vec<Block> = Vec::new(); // building the next list
         while !to_be_appended.is_empty() {
             if let Some(head) = to_be_appended.pop_front() {
@@ -104,9 +102,8 @@ impl PageMaker {
                     // This is not maximally efficient, BUT.
                     let (copy, maybe_children) = split_block_from_children(head);
                     current_tranche.push(copy);
-                    let created = self
-                        .do_append(parent_id, current_tranche.as_slice(), after.clone())
-                        .await?;
+                    let created =
+                        do_append(&self.notion, parent_id, current_tranche.as_slice(), after.clone(), 0).await?;
                     // snag the id from the last block in the request, which will be head's id
                     let head_id = if let Some(last) = created.last() {
                         if let Some(ref id) = last.id {
@@ -119,7 +116,6 @@ impl PageMaker {
                         parent_id.to_owned()
                     };
                     if let Some(mut head_children) = maybe_children {
-                        eprintln!("we're adding our nested children now");
                         Box::pin(self.append_children(head_id.as_str(), None, &mut head_children)).await?;
                     }
                     current_tranche = Vec::new();
@@ -128,38 +124,23 @@ impl PageMaker {
                 } else {
                     current_tranche.push(head);
                 }
+                // Magic constant is an API limit. Make the request, then keep on going.
+                if current_tranche.len() == 100 {
+                    let created =
+                        do_append(&self.notion, parent_id, current_tranche.as_slice(), after.clone(), 0).await?;
+                    if let Some(last) = created.last() {
+                        after.clone_from(&last.id);
+                    }
+                    current_tranche = Vec::new();
+                }
             }
         }
 
         if !current_tranche.is_empty() {
-            let _created = self
-                .do_append(parent_id, current_tranche.as_slice(), after.clone())
-                .await?;
+            let _created = do_append(&self.notion, parent_id, current_tranche.as_slice(), after.clone(), 0).await?;
         }
 
         Ok(())
-    }
-
-    async fn do_append(&self, parent_id: &str, slice: &[Block], after: Option<String>) -> Result<Vec<Block>> {
-        if slice.is_empty() {
-            return Ok(Vec::new());
-        }
-        eprintln!(
-            "    doing append; parent_id={parent_id}; after_id={after:?}; children count={};",
-            slice.len()
-        );
-        let children = slice.to_vec();
-        // We're having 409 problems at the speed we're making API requests right now. It is to lol.
-        tokio::time::sleep(std::time::Duration::from_millis(NOTION_DELAY_MS)).await;
-        let append_req = AppendBlockChildrenRequest { children, after };
-        let response = self
-            .notion
-            .blocks
-            .append_block_children(parent_id, append_req)
-            .await
-            .into_diagnostic()?;
-        // response.results is a list of blocks matching the nodes we just appended
-        Ok(response.results)
     }
 
     fn block_has_deep_children(nesting: u8, block: &Block) -> bool {
@@ -289,15 +270,15 @@ impl State {
     }
 
     /// Render a node type that becomes Notion rich text.
-    fn render_text_node(&self, node: &Node) -> Option<RichText> {
+    fn render_text_node(&self, node: &Node) -> Option<Vec<RichText>> {
         match node {
             Node::Delete(deletion) => Some(self.render_deletion(deletion)),
             Node::Emphasis(emphasized) => Some(self.render_emphasized(emphasized)),
-            Node::FootnoteReference(reference) => Some(self.render_noteref(reference)),
-            Node::InlineCode(inline) => Some(self.render_inline_code(inline)),
-            Node::InlineMath(math) => Some(self.render_inline_math(math)),
-            Node::Link(link) => Some(self.render_link(link)),
-            Node::LinkReference(linkref) => Some(self.render_linkref(linkref)),
+            Node::FootnoteReference(reference) => Some(vec![self.render_noteref(reference)]),
+            Node::InlineCode(inline) => Some(vec![self.render_inline_code(inline)]),
+            Node::InlineMath(math) => Some(vec![self.render_inline_math(math)]),
+            Node::Link(link) => Some(vec![self.render_link(link)]),
+            Node::LinkReference(linkref) => Some(vec![self.render_linkref(linkref)]),
             Node::Strong(strong) => Some(self.render_strong(strong)),
             Node::Text(text) => Some(self.render_text(text)),
             _ => None,
@@ -307,22 +288,13 @@ impl State {
     // Repeat yourself to find patterns, I say, doggedly.
 
     /// Render plain text.
-    fn render_text(&self, input: &mdast::Text) -> RichText {
-        let text = Text {
-            content: input.value.clone(),
-            link: None,
-        };
+    fn render_text(&self, input: &mdast::Text) -> Vec<RichText> {
         let annotations = Annotations { ..Default::default() };
-        RichText::Text {
-            text,
-            annotations: Some(annotations),
-            plain_text: Some(input.value.clone()),
-            href: None,
-        }
+        State::split_text_at_api_limit(input.value.clone(), annotations)
     }
 
     /// Convenience for turning a text range into a rich text blob given a style annotation.
-    fn make_into_rich_text(children: &[Node], style: Annotations) -> RichText {
+    fn make_into_rich_text(children: &[Node], style: Annotations) -> Vec<RichText> {
         let content: String = children
             .iter()
             .filter_map(|xs| match xs {
@@ -331,21 +303,45 @@ impl State {
             })
             .collect::<Vec<String>>()
             .join("");
+        State::split_text_at_api_limit(content, style)
+    }
+
+    fn split_text_at_api_limit(mut content: String, style: Annotations) -> Vec<RichText> {
+        let mut results: Vec<RichText> = Vec::new();
+        while content.len() > 2000 {
+            let mut split_point = 2000;
+            while !content.is_char_boundary(split_point) {
+                split_point -= 1;
+            }
+            let (first, last) = content.split_at(split_point);
+            let text = Text {
+                content: first.to_owned(),
+                link: None,
+            };
+            results.push(RichText::Text {
+                text,
+                annotations: Some(style.clone()),
+                plain_text: Some(first.to_owned()),
+                href: None,
+            });
+            content = last.to_string();
+        }
 
         let text = Text {
             content: content.clone(),
             link: None,
         };
-
-        RichText::Text {
+        results.push(RichText::Text {
             text,
             annotations: Some(style),
             plain_text: Some(content),
             href: None,
-        }
+        });
+
+        results
     }
 
-    fn render_strong(&self, strong: &mdast::Strong) -> RichText {
+    fn render_strong(&self, strong: &mdast::Strong) -> Vec<RichText> {
         let annotations = Annotations {
             bold: true,
             ..Default::default()
@@ -353,7 +349,7 @@ impl State {
         State::make_into_rich_text(strong.children.as_slice(), annotations)
     }
 
-    fn render_emphasized(&self, emphasized: &mdast::Emphasis) -> RichText {
+    fn render_emphasized(&self, emphasized: &mdast::Emphasis) -> Vec<RichText> {
         let annotations = Annotations {
             italic: true,
             ..Default::default()
@@ -361,7 +357,7 @@ impl State {
         State::make_into_rich_text(emphasized.children.as_slice(), annotations)
     }
 
-    fn render_deletion(&self, strike: &mdast::Delete) -> RichText {
+    fn render_deletion(&self, strike: &mdast::Delete) -> Vec<RichText> {
         let annotations = Annotations {
             strikethrough: true,
             ..Default::default()
@@ -468,6 +464,7 @@ impl State {
             .children
             .iter()
             .filter_map(|xs| self.render_text_node(xs))
+            .flatten()
             .collect();
         let quote = QuoteValue {
             rich_text,
@@ -485,6 +482,7 @@ impl State {
             .children
             .iter()
             .filter_map(|xs| self.render_text_node(xs))
+            .flatten()
             .collect();
         let emoji = Emoji {
             emoji: "🗒️".to_string()
@@ -577,6 +575,7 @@ impl State {
         cell.children
             .iter()
             .filter_map(|xs| self.render_text_node(xs))
+            .flatten()
             .collect()
     }
 
@@ -585,6 +584,7 @@ impl State {
             .children
             .iter()
             .filter_map(|xs| self.render_text_node(xs))
+            .flatten()
             .collect();
         let paragraph = ParagraphValue {
             rich_text,
@@ -725,6 +725,7 @@ impl State {
                 .children
                 .iter()
                 .filter_map(|xs| self.render_text_node(xs))
+                .flatten()
                 .collect(),
             _ => Vec::new(),
         };
@@ -761,6 +762,7 @@ impl State {
                 .children
                 .iter()
                 .filter_map(|xs| self.render_text_node(xs))
+                .flatten()
                 .collect(),
             _ => Vec::new(),
         };
@@ -790,6 +792,7 @@ impl State {
             .children
             .iter()
             .filter_map(|xs| self.render_text_node(xs))
+            .flatten()
             .collect();
 
         let value = HeadingsValue {
