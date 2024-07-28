@@ -115,13 +115,13 @@ impl Cache {
         content.sort_by(|left, right| left.0.to_lowercase().cmp(&right.0.to_lowercase()));
 
         for (title, id) in content {
-            println!("    {}    {}", id.bold(), title.yellow());
+            println!("    {}    {}", id.bold(), title.green());
         }
 
         Ok(())
     }
 
-    fn file_path(&self, slug: &str, id: impl Display) -> String {
+    pub fn file_path(&self, slug: &str, id: impl Display) -> String {
         format!("{}/{slug}_{id}", self.root)
     }
 
@@ -141,7 +141,7 @@ impl Cache {
             self.load_item(id)
         } else {
             self.do_delay();
-            println!("    fetching {} id={}", T::slug().blue(), id.yellow());
+            println!("    fetching {} id={}", T::slug().purple(), id.bold());
             T::fetch(&self.nuclino, id).map(|xs| *xs)
         }
     }
@@ -175,7 +175,7 @@ impl Cache {
             return Err(miette!("Declining to fetch a page twice"));
         }
         let page = self.fetch_item::<Page>(id, false)?;
-        println!("        got '{}'", page.title().blue());
+        println!("        got '{}'", page.title().green());
         self.pending.insert(*id);
 
         if let Ok(creator) = self.fetch_item::<User>(page.created_by(), false) {
@@ -201,7 +201,7 @@ impl Cache {
         match self.save_item(&page, page.id()) {
             Ok(_) => {}
             Err(e) => {
-                println!("    {} save failed: {e:?}", page.title().blue());
+                println!("    {} save failed: {e:?}", page.title().green());
             }
         }
 
@@ -240,11 +240,11 @@ impl Cache {
             .context("fetching file info from network")?;
         self.save_item(&file_info, file_info.id())?;
         let dlurl = file_info.download_info().url.clone();
-        // println!("            downloading file data {}", file_info.filename().blue());
+        // println!("            downloading file data {}", file_info.filename().yellow());
         let bytes = self.nuclino.download_file(dlurl.as_str()).into_diagnostic()?;
 
         let fpath = self.file_path(File::slug(), file_info.filename());
-        println!("            {}; data length={}", fpath.blue(), bytes.len());
+        println!("            {}; data length={}", fpath.yellow(), bytes.len());
         std::fs::write(fpath, bytes).into_diagnostic()?;
 
         Ok(())
@@ -252,7 +252,7 @@ impl Cache {
 
     pub fn _load_file(&self, file_info: &File) -> Result<Vec<u8>> {
         let fpath = self.file_path(File::slug(), file_info.filename());
-        println!("file path is {}", fpath.blue());
+        // println!("file path is {}", fpath.yellow());
         let bytes = std::fs::read(fpath)
             .into_diagnostic()
             .context("loading file path {fpath}")?;

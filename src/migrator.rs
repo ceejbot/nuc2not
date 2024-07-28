@@ -46,45 +46,33 @@ impl Migrator {
         Ok(Self { notion, parent })
     }
 
-    pub async fn migrate_one_page(&self, cache: &mut Cache, page_id: String) -> Result<NotionPage> {
-        let uuid = Uuid::try_parse(page_id.as_str()).into_diagnostic()?;
-        let _unused = cache.cache_page(&uuid)?; // make sure it's in cache
-        self.migrate_page(&uuid, self.parent.as_str()).await
-    }
-
     /// We walk workspace children instead of getting a full list of workspace pages
     /// so that we can guarantee that any links on a specific page have been migrated
     /// and have Notion URLs before we try to migrate the page itself.
-    pub async fn migrate(&self, cache: Cache, workspace: &Workspace) -> Result<()> {
-        let _ignored = CACHE.set(cache);
+    pub async fn migrate(&self, cachet: Cache, workspace: &Workspace) -> Result<()> {
+        self.migrate_pagelist(cachet, workspace.children()).await
+    }
 
+    pub async fn migrate_pagelist(&self, cachet: Cache, ids: &[Uuid]) -> Result<()> {
+        // a pun with a point. except they're pronounced differently. it is to lol.
+        let _ignored = CACHE.set(cachet);
         // Is there a better way?
-        let futures: Vec<_> = workspace
-            .children()
+        let futures: Vec<_> = ids
             .iter()
-            .map(|id| async { self.migrate_page(id, self.parent.as_str()).await })
+            .map(|id| async { self.migrate_page(&id.clone(), self.parent.as_str()).await })
             .collect();
         let mut buffered = stream::iter(futures).buffered(2);
         while let Some(child_result) = buffered.next().await {
-            match child_result {
-                Ok(_) => {
-                    // no-op
-                }
-                Err(_) => {
-                    // should log it
-                }
+            if let Err(_e) = child_result {
+                // should log it
             }
         }
-
-        // emit some info
-        // println!("{:?}", urlmap());
-
         Ok(())
     }
 
     async fn migrate_page(&self, id: &Uuid, parent: &str) -> Result<NotionPage> {
         let page = cache().load_item::<Page>(id)?;
-        eprintln!("Migrating page {}…", page.title().bold().green());
+        // eprintln!("    Migrating page {}…", page.title().bold().green());
         let properties = properties_from_nuclino(&page);
         // Now we migrate the content for this item, because the url map will now
         // let us rewrite the urls.
@@ -92,7 +80,7 @@ impl Migrator {
             Page::Item(ref item) => self.migrate_item(item, parent, properties).await?,
             Page::Collection(ref collection) => self.migrate_collection(collection, parent, properties).await?,
         };
-        println!("    {} migrated.", page.title().bold().green());
+        // println!("    {} migrated.", page.title().bold().green());
         Ok(migrated)
     }
 
@@ -111,11 +99,27 @@ impl Migrator {
         urlmap().insert(item.url().to_string(), notion_page.url.clone());
 
         let meta = item.content_meta();
-        let _yeet: Vec<nuclino_rs::File> = meta
+        let related_files: Vec<nuclino_rs::File> = meta
             .file_ids
             .iter()
             .filter_map(|xs| cache().load_item::<nuclino_rs::File>(xs).ok())
             .collect();
+
+        println!(
+            "        {} migrated to {}",
+            item.title().bold().green(),
+            notion_page.url.yellow()
+        );
+        if related_files.is_empty() {
+            return Ok(notion_page);
+        }
+
+        println!("        To complete the migration, upload each of these files by hand:");
+        related_files.iter().for_each(|xs| {
+            let fpath = cache().file_path("file", xs.filename()); // erk
+            println!("            * {}", fpath.bold());
+        });
+
         /*
                 let id = notion_page.id.clone();
                 let futures: Vec<_> = infos

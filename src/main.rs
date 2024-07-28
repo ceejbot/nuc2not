@@ -12,7 +12,7 @@ use cache::Cache;
 use clap::{Parser, Subcommand};
 use fzf_wrapped::{run_with_output, Fzf};
 use miette::{IntoDiagnostic, Result};
-use nuclino_rs::Workspace;
+use nuclino_rs::{Uuid, Workspace};
 use owo_colors::OwoColorize;
 
 #[derive(Parser, Debug)]
@@ -35,10 +35,11 @@ pub enum Command {
     /// upload the media by hand: the Notion API does not have endpoints for doing
     /// this automatically.
     MigratePage {
-        /// The id of the Nuclino page to migrate
-        page: String,
-        /// The id of the Notion page to migrate to.
+        /// The id of the Notion page where this Nuclino page should go.
+        #[clap(long, short)]
         parent: String,
+        /// The ids of of any in-cache Nuclino pages you want to migrate to Notion.
+        pages: Vec<String>,
     },
     /// Migrate a previously-cached Nuclino workspace to Notion. Unreliable!!
     MigrateWorkspace {
@@ -94,10 +95,10 @@ async fn main() -> Result<()> {
         Command::InspectCache => {
             cache.print_details()?;
         }
-        Command::MigratePage { page, parent } => {
-            println!("Migrating page id={}", page.bold());
+        Command::MigratePage { pages, parent } => {
+            let uuids: Vec<Uuid> = pages.iter().filter_map(|xs| Uuid::try_parse(xs).ok()).collect();
             let migrator = migrator::Migrator::new(notion_key, parent.clone())?;
-            migrator.migrate_one_page(&mut cache, page).await?;
+            migrator.migrate_pagelist(cache, uuids.as_slice()).await?;
         }
         Command::MigrateWorkspace { parent } => {
             println!("Migrating the {} workspace...", found.name().blue());

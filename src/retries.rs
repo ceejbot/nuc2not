@@ -16,14 +16,17 @@ static MAX_RETRIES: u8 = 5;
 static NOTION_DELAY_MS: u64 = 200;
 
 pub async fn do_create(notion: &Client, request: &CreateAPageRequest, retry: u8) -> Result<NotionPage> {
-    println!("    do_create(); retry={}", retry.bold());
+    if retry > 0 {
+        println!("    do_create(); retry={}", retry.bold());
+    }
+    let next_retry = retry + 1;
     match notion.pages.create_a_page(request.clone()).await {
         Ok(resp) => Ok(resp),
         Err(e) => match e {
             notion_client::NotionClientError::InvalidStatusCode { ref error } => {
                 if error.status == 409 && retry < MAX_RETRIES {
                     println!("    do_create() got {}; retrying", 409.bold());
-                    Box::pin(do_create(notion, request, retry + 1)).await
+                    Box::pin(do_create(notion, request, next_retry)).await
                 } else {
                     Err(e).into_diagnostic()
                 }
@@ -40,11 +43,15 @@ pub async fn do_append(
     after: Option<String>,
     retry: u8,
 ) -> Result<Vec<Block>> {
-    println!(
-        "    doing append; parent_id={parent_id}; after_id={after:?}; children={}; retries: {}",
-        slice.len(),
-        retry.bold()
-    );
+    if retry > 0 {
+        println!("    do_append(); retry={}", retry.bold());
+        // println!(
+        //     "    doing append; parent_id={parent_id}; after_id={after:?}; children={}; retries: {}",
+        //     slice.len(),
+        //     retry.bold()
+        // );
+    }
+    let next_retry = retry + 1;
     if slice.is_empty() {
         return Ok(Vec::new());
     }
@@ -61,7 +68,7 @@ pub async fn do_append(
             notion_client::NotionClientError::InvalidStatusCode { ref error } => {
                 if error.status == 409 && retry < MAX_RETRIES {
                     println!("    do_append() got {}; retrying", 409.bold());
-                    Box::pin(do_append(notion, parent_id, children.as_slice(), after, retry + 1)).await
+                    Box::pin(do_append(notion, parent_id, children.as_slice(), after, next_retry)).await
                 } else {
                     Err(e).into_diagnostic()
                 }

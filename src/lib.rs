@@ -87,10 +87,10 @@ impl PageMaker {
         after_id: Option<String>,
         to_be_appended: &mut VecDeque<Block>,
     ) -> Result<()> {
-        eprintln!(
-            "entering append_children({parent_id}, {after_id:?}, len={})",
-            to_be_appended.len()
-        );
+        // eprintln!(
+        //     "entering append_children({parent_id}, {after_id:?}, len={})",
+        //     to_be_appended.len()
+        // );
         let mut after: Option<String> = after_id.clone();
         let mut current_tranche: Vec<Block> = Vec::new(); // building the next list
         while !to_be_appended.is_empty() {
@@ -485,7 +485,7 @@ impl State {
             .flatten()
             .collect();
         let emoji = Emoji {
-            emoji: "🗒️".to_string(),
+            emoji: "🗒️".to_string()
         };
         let icon = notion_client::objects::block::Icon::Emoji(emoji);
         let callout = CalloutValue {
