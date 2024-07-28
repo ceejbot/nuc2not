@@ -52,7 +52,7 @@ impl Cache {
                 Err(_) => None,
             })
             .collect();
-        println!("found {} items in cache for workspace", idset.len());
+        println!("found {} items already in cache for workspace", idset.len());
 
         Ok(Self {
             root,
@@ -69,6 +69,56 @@ impl Cache {
         self.save_item(&oh_no, oh_no.id()).context("saving workspace")?;
         let _cached: Result<Vec<Page>, _> = oh_no.children().iter().map(|id| self.cache_page(id)).collect();
         Ok(self.cached.len())
+    }
+
+    pub fn print_details(&self) -> Result<()> {
+        let idset: HashSet<Uuid> = std::fs::read_dir(self.root.as_str())
+            .into_diagnostic()?
+            .filter_map(|xs| match xs {
+                Ok(fname) => {
+                    let file_name = fname.file_name();
+                    let basename = file_name.to_string_lossy();
+                    if basename.starts_with("page") {
+                        if let Some(stem) = basename.split('_').last() {
+                            let idstr = stem.replace(".json", "");
+                            Uuid::try_parse(idstr.as_str()).ok()
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+                Err(_) => None,
+            })
+            .collect();
+
+        println!(
+            "{} has {} regular wiki pages with text:",
+            self.workspace.name().bold().blue(),
+            idset.len().bold()
+        );
+
+        let mut content: Vec<(String, &Uuid)> = idset
+            .iter()
+            .filter_map(|pageid| {
+                if let Ok(page) = self.load_item::<Page>(pageid) {
+                    match page {
+                        Page::Item(p) => Some((p.title().to_string(), pageid)),
+                        Page::Collection(_) => None,
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        content.sort_by(|left, right| left.0.to_lowercase().cmp(&right.0.to_lowercase()));
+
+        for (title, id) in content {
+            println!("    {}    {}", id.bold(), title.yellow());
+        }
+
+        Ok(())
     }
 
     fn file_path(&self, slug: &str, id: impl Display) -> String {

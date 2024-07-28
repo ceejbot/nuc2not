@@ -17,8 +17,8 @@ To test in development:
 
 ```text
 nuc2not cache # fill the cache for a workspace
-nuc2not workspace <hexid> # migrate a workspace (unreliably)
-nuc2not page <hexid> <hexid> # migrate a single page
+nuc2not migrate-workspace <hexid> # migrate a workspace (unreliably)
+nuc2not migrate-page <hexid> <hexid> # migrate a single page
 ```
 
 ## Usage
@@ -27,12 +27,12 @@ nuc2not page <hexid> <hexid> # migrate a single page
 Usage: nuc2not [OPTIONS] <COMMAND>
 
 Commands:
-  cache      Cache a Nuclino workspace locally. You'll be prompted to select the workspace
-  page       Migrate a single page by id. If the page has media, you'll be prompted to upload
-             the media by hand: the Notion API does not have endpoints for doing this
-             automatically
-  workspace  Migrate a previously-cached Nuclino workspace to Notion. Unreliable!!
-  help       Print this message or the help of the given subcommand(s)
+  cache              Cache a Nuclino workspace locally. You'll be prompted to select the workspace
+  inspect-cache      Inspect your local cache, listing pages by id
+  migrate-page       Migrate a single page by id. If the page has media, you'll be prompted to upload the media by hand: the Notion API does not have endpoints for doing this
+                         automatically
+  migrate-workspace  Migrate a previously-cached Nuclino workspace to Notion. Unreliable!!
+  help               Print this message or the help of the given subcommand(s)
 
 Options:
   -w, --wait <WAIT>  How many milliseconds to wait between Nuclino requests [default: 750]
