@@ -56,7 +56,7 @@ fn choose_workspace(nuclino_key: &str) -> Result<Workspace> {
     names.sort();
     let fzf = Fzf::builder()
         .border(fzf_wrapped::Border::Rounded)
-        .border_label("Select a workspace to migrate")
+        .border_label("Select a workspace to act on")
         .build()
         .into_diagnostic()?;
     let Some(to_migrate) = run_with_output(fzf, names) else {
