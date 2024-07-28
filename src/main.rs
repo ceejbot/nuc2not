@@ -9,7 +9,7 @@ mod migrator;
 use std::process::exit;
 
 use cache::Cache;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use fzf_wrapped::{run_with_output, Fzf};
 use miette::{IntoDiagnostic, Result};
 use owo_colors::OwoColorize;
@@ -17,15 +17,31 @@ use owo_colors::OwoColorize;
 #[derive(Parser, Debug)]
 #[clap(name = "nuclino-to-notion", version)]
 pub struct Args {
-    /// Populate the cache for the chosen Nuclino workspace.
-    #[clap(long, short, global = true)]
-    populate: bool,
     /// How many milliseconds to wait between Nuclino requests.
     #[clap(long, short, global = true, default_value = "750")]
     wait: u64,
-    /// An optional parent page for the imported items. If not provided, the tool won't
-    /// try migrate pages to Notion.
-    parent: Option<String>,
+    #[clap(subcommand)]
+    cmd: Command,
+}
+
+#[derive(Clone, Debug, Subcommand)]
+pub enum Command {
+    /// Cache a Nuclino workspace locally. You'll be prompted to select the workspace.
+    Cache,
+    /// Migrate a single page by id. If the page has media, you'll be prompted to
+    /// upload the media by hand: the Notion API does not have endpoints for doing
+    /// this automatically.
+    Page {
+        /// The id of the Nuclino page to migrate
+        page: String,
+        /// The id of the Notion page to migrate to.
+        parent: String,
+    },
+    /// Migrate a previously-cached Nuclino workspace to Notion. Unreliable!!
+    Workspace {
+        /// A parent Notion page for the migrated items.
+        parent: String,
+    },
 }
 
 /// Process command-line options and act on them.
@@ -61,16 +77,22 @@ async fn main() -> Result<()> {
 
     let mut cache = Cache::new(nuclino_key, &args, found)?;
 
-    println!("Migrating the {} workspace...", to_migrate.blue());
-    if args.populate {
-        println!("Populating the Nuclino cache…");
-        let count = cache.cache_workspace()?;
-        println!("    {count} items cached");
-    }
-    if let Some(parent) = args.parent {
-        println!("Doing migration…");
-        let migrator = migrator::Migrator::new(notion_key, parent)?;
-        migrator.migrate(cache, found).await?;
+    match args.cmd {
+        Command::Cache => {
+            println!("Caching the {} workspace...", to_migrate.blue());
+            let count = cache.cache_workspace()?;
+            println!("    {count} items cached");
+        }
+        Command::Page { page, parent } => {
+            println!("Migrating page id={}", page.bold());
+            let migrator = migrator::Migrator::new(notion_key, parent.clone())?;
+            migrator.migrate_one_page(&mut cache, page).await?;
+        }
+        Command::Workspace { parent } => {
+            println!("Migrating the {} workspace...", to_migrate.blue());
+            let migrator = migrator::Migrator::new(notion_key, parent)?;
+            migrator.migrate(cache, found).await?;
+        }
     }
 
     Ok(())

@@ -485,7 +485,7 @@ impl State {
             .flatten()
             .collect();
         let emoji = Emoji {
-            emoji: "🗒️".to_string()
+            emoji: "🗒️".to_string(),
         };
         let icon = notion_client::objects::block::Icon::Emoji(emoji);
         let callout = CalloutValue {

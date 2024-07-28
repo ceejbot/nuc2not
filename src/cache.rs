@@ -120,7 +120,7 @@ impl Cache {
         Ok(())
     }
 
-    fn cache_page(&mut self, id: &Uuid) -> Result<Page> {
+    pub fn cache_page(&mut self, id: &Uuid) -> Result<Page> {
         if self.pending.contains(id) {
             return Err(miette!("Declining to fetch a page twice"));
         }

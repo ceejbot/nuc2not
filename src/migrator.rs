@@ -46,6 +46,12 @@ impl Migrator {
         Ok(Self { notion, parent })
     }
 
+    pub async fn migrate_one_page(&self, cache: &mut Cache, page_id: String) -> Result<NotionPage> {
+        let uuid = Uuid::try_parse(page_id.as_str()).into_diagnostic()?;
+        let _unused = cache.cache_page(&uuid)?; // make sure it's in cache
+        self.migrate_page(&uuid, self.parent.as_str()).await
+    }
+
     /// We walk workspace children instead of getting a full list of workspace pages
     /// so that we can guarantee that any links on a specific page have been migrated
     /// and have Notion URLs before we try to migrate the page itself.

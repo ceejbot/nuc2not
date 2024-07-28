@@ -1,6 +1,6 @@
 # nuclino to notion
 
-WIP; do not eat.
+WIP; do not eat. Might not succeed in migrating to Notion because it doesn't yet handle 409s properly, and ALSO because of missing functionality in the Notion API. Definitely succeeds in making a local backup of Nuclino wiki pages with metadata and media.
 
 This is a command-line tool that migrates a single Nuclino workspace to a set of pages in Notion.
 
@@ -16,21 +16,26 @@ To use it:
 To test in development:
 
 ```text
-nuc2not --populate # fill the cache only
-nuc2not <hexid> # as many times as you like without exploding your nuclino rate limit
+nuc2not cache # fill the cache for a workspace
+nuc2not workspace <hexid> # migrate a workspace (unreliably)
+nuc2not page <hexid> <hexid> # migrate a single page
 ```
 
 ## Usage
 
 ```text
-Usage: nuc2not [OPTIONS] [PARENT]
+Usage: nuc2not [OPTIONS] <COMMAND>
 
-Arguments:
-  [PARENT]  An optional parent page for the imported items. If not provided, the tool won't try migrate pages to Notion
+Commands:
+  cache      Cache a Nuclino workspace locally. You'll be prompted to select the workspace
+  page       Migrate a single page by id. If the page has media, you'll be prompted to upload
+             the media by hand: the Notion API does not have endpoints for doing this
+             automatically
+  workspace  Migrate a previously-cached Nuclino workspace to Notion. Unreliable!!
+  help       Print this message or the help of the given subcommand(s)
 
 Options:
-  -p, --populate     Populate the cache for the chosen Nuclino workspace.
-  -w, --wait <WAIT>  How many milliseconds to wait between Nuclino requests [default: 500]
+  -w, --wait <WAIT>  How many milliseconds to wait between Nuclino requests [default: 750]
   -h, --help         Print help
   -V, --version      Print version
 ```
