@@ -1,10 +1,15 @@
 [package]
 name = "nuc2not"
-description = "Migrate a Nuclino workspace to a Notion team."
+description = "Migrate a Nuclino workspace to Notion pages."
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+readme = "README.md"
+license = "Parity-7.0.0"
+categories = ["command-line-utilities"]
+keywords = ["cli", "nuclino", "notion"]
+repository = "https://github.com/ceejbot/nuc2not"
+homepage = "https://github.com/ceejbot/nuc2not"
+authors = ["C J Silverio <ceejceej@gmail.com>"]
 
 [dependencies]
 chrono = "0.4.38"
@@ -27,3 +32,25 @@ tokio-stream = "0.1.15"
 
 [dev-dependencies]
 anyhow = "1.0.86"
+
+# The profile that 'cargo dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
+# Config for 'cargo dist'
+[workspace.metadata.dist]
+# The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.19.1"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell"]
+# Target platforms to build apps for (Rust target-triple syntax)
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Publish jobs to run in CI
+pr-run-mode = "plan"
+# Whether to install an updater program
+install-updater = false

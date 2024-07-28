@@ -80,15 +80,10 @@ pub fn debug_print(block: &Block) {
 }
 
 #[cfg(test)]
-mod tests {
+mod a {
     use notion_client::objects::block::*;
 
     use crate::convert;
-
-    #[derive(Debug, Clone)]
-    struct MockClient {
-        // todo
-    }
 
     #[test]
     fn rich_text() {
