@@ -8,10 +8,10 @@ mod migrator;
 
 use std::process::exit;
 
+use anyhow::Result;
 use cache::Cache;
 use clap::{Parser, Subcommand};
 use fzf_wrapped::{run_with_output, Fzf};
-use miette::{IntoDiagnostic, Result};
 use nuclino_rs::{Uuid, Workspace};
 use owo_colors::OwoColorize;
 
@@ -50,15 +50,14 @@ pub enum Command {
 
 fn choose_workspace(nuclino_key: &str) -> Result<Workspace> {
     let client = nuclino_rs::Client::create(nuclino_key, None);
-    let workspaces = client.workspace_list(None, None).into_diagnostic()?.to_vec();
+    let workspaces = client.workspace_list(None, None)?.to_vec();
 
     let mut names: Vec<String> = workspaces.iter().map(|space| space.name().to_string()).collect();
     names.sort();
     let fzf = Fzf::builder()
         .border(fzf_wrapped::Border::Rounded)
         .border_label("Select a workspace to act on")
-        .build()
-        .into_diagnostic()?;
+        .build()?;
     let Some(to_migrate) = run_with_output(fzf, names) else {
         println!("Nothing to do.");
         exit(0);
@@ -77,7 +76,7 @@ fn choose_workspace(nuclino_key: &str) -> Result<Workspace> {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let _ignored = dotenvy::dotenv().into_diagnostic()?;
+    let _ignored = dotenvy::dotenv()?;
     let notion_key =
         std::env::var("NOTION_API_KEY").expect("You must provide a Notion api key in the env var NOTION_API_KEY.");
     let nuclino_key =

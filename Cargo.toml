@@ -12,13 +12,13 @@ homepage = "https://github.com/ceejbot/nuc2not"
 authors = ["C J Silverio <ceejceej@gmail.com>"]
 
 [dependencies]
+anyhow = "1.0.86"
 chrono = "0.4.38"
 clap = { version = "4.5.11", features = ["derive", "wrap_help"] }
 dotenvy = "0.15.7"
 futures = "0.3.30"
 fzf-wrapped = "0.1.3"
 markdown = "1.0.0-alpha.18"
-miette = { version = "7.2.0", features = ["owo-colors", "textwrap", "fancy"] }
 notion-client = "1.0.2"
 nuclino-rs = "1.1.3"
 once_cell = "1.19.0"
@@ -29,9 +29,6 @@ slug = "0.1.5"
 tempfile = "3.10.1"
 tokio = { version = "1.39.2", features = ["full"] }
 tokio-stream = "0.1.15"
-
-[dev-dependencies]
-anyhow = "1.0.86"
 
 # The profile that 'cargo dist' will build with
 [profile.dist]
@@ -47,7 +44,11 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+]
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Publish jobs to run in CI

@@ -1,7 +1,7 @@
 //! Wrappers around the Notion client that retry requests that get 409s.
 //!
 
-use miette::{IntoDiagnostic, Result};
+use anyhow::Result;
 use notion_client::endpoints::blocks::append::request::AppendBlockChildrenRequest;
 use notion_client::endpoints::pages::create::request::CreateAPageRequest;
 use notion_client::endpoints::Client;
@@ -28,10 +28,10 @@ pub async fn do_create(notion: &Client, request: &CreateAPageRequest, retry: u8)
                     println!("    do_create() got {}; retrying", 409.bold());
                     Box::pin(do_create(notion, request, next_retry)).await
                 } else {
-                    Err(e).into_diagnostic()
+                    Err(e.into())
                 }
             }
-            _ => Err(e).into_diagnostic(),
+            _ => Err(e.into()),
         },
     }
 }
@@ -70,10 +70,10 @@ pub async fn do_append(
                     println!("    do_append() got {}; retrying", 409.bold());
                     Box::pin(do_append(notion, parent_id, children.as_slice(), after, next_retry)).await
                 } else {
-                    Err(e).into_diagnostic()
+                    Err(e.into())
                 }
             }
-            _ => Err(e).into_diagnostic(),
+            _ => Err(e.into()),
         },
     }
 }

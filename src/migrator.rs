@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
+use anyhow::{anyhow, Result};
 use futures::stream::{self, StreamExt};
-use miette::{miette, IntoDiagnostic, Result};
 use notion_client::endpoints::pages::create::request::CreateAPageRequest;
 use notion_client::endpoints::Client;
 use notion_client::objects::page::{Page as NotionPage, PageProperty};
@@ -40,8 +40,8 @@ pub struct Migrator {
 }
 
 impl Migrator {
-    pub fn new(key: String, parent: String) -> Result<Self> {
-        let notion = notion_client::endpoints::Client::new(key, None).into_diagnostic()?;
+    pub fn new(key: String, parent: String) -> anyhow::Result<Self> {
+        let notion = notion_client::endpoints::Client::new(key, None)?;
 
         Ok(Self { notion, parent })
     }
@@ -91,7 +91,7 @@ impl Migrator {
         properties: BTreeMap<String, PageProperty>,
     ) -> Result<NotionPage> {
         let Some(content) = item.content() else {
-            return Err(miette!("page had no content; skipping"));
+            return Err(anyhow!("page had no content; skipping"));
         };
 
         let remapped = self.remap(content);

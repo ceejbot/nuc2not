@@ -76,6 +76,7 @@ pub fn debug_print(block: &Block) {
         BlockType::Toggle { .. } => eprintln!("BlockType::Toggle"),
         BlockType::Video { .. } => eprintln!("BlockType::Video"),
         BlockType::LinkToPage { .. } => eprintln!("BlockType::LinkToPage"),
+        BlockType::Unsupported { .. } => eprintln!("BlockType::Unsupported"),
     }
 }
 

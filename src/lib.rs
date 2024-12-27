@@ -7,9 +7,9 @@ mod tests;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
+use anyhow::{anyhow, Result};
 use markdown::mdast::{self, Node};
 use markdown::{to_mdast, ParseOptions};
-use miette::{miette, Result};
 use notion_client::endpoints::pages::create::request::CreateAPageRequest;
 use notion_client::endpoints::Client;
 use notion_client::objects::block::*;
@@ -57,7 +57,7 @@ impl PageMaker {
         let blocks = convert(input);
         if blocks.is_empty() {
             // early return for readability
-            return Err(miette!("Markdown AST has no children; is the markdown file empty?"));
+            return Err(anyhow!("Markdown AST has no children; is the markdown file empty?"));
         }
 
         let parent = Parent::PageId {
@@ -250,7 +250,7 @@ impl State {
     fn render_node(&mut self, node: &Node) -> Vec<Block> {
         match node {
             // Node::Root(_) => Vec::new(),
-            Node::BlockQuote(quote) => self.render_quote(quote),
+            Node::Blockquote(quote) => self.render_quote(quote),
             Node::FootnoteDefinition(footnote) => self.render_footnote(footnote),
             Node::List(list) => self.begin_list(list),
             Node::Html(html) => self.render_html(html),
@@ -459,7 +459,7 @@ impl State {
         }
     }
 
-    fn render_quote(&self, quote: &mdast::BlockQuote) -> Vec<Block> {
+    fn render_quote(&self, quote: &mdast::Blockquote) -> Vec<Block> {
         let rich_text: Vec<RichText> = quote
             .children
             .iter()

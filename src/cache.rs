@@ -5,14 +5,14 @@ use std::fmt::Display;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use miette::{miette, Context, IntoDiagnostic, Result};
-use nuclino_rs::{File, Item, Page, User, Uuid, Workspace};
+use anyhow::{anyhow, Context, Result};
+use nuclino_rs::{File, Item, Page, User};
 use once_cell::sync::Lazy;
 use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
 use slug::slugify;
 
-use crate::Args;
+use crate::{Args, Uuid, Workspace};
 
 static WAIT_UNTIL: Lazy<Mutex<Instant>> = Lazy::new(|| Mutex::new(Instant::now()));
 
@@ -36,11 +36,8 @@ impl Cache {
         let workspace = of_interest.clone();
 
         let root = format!("{CACHE_BASE}/{}/{}", slugify(name.clone()), slugify(workspace.name()));
-        std::fs::create_dir_all(root.as_str())
-            .into_diagnostic()
-            .context("Creating cache directory for workspace")?;
-        let idset: HashSet<Uuid> = std::fs::read_dir(root.as_str())
-            .into_diagnostic()?
+        std::fs::create_dir_all(root.as_str()).context("Creating cache directory for workspace")?;
+        let idset: HashSet<Uuid> = std::fs::read_dir(root.as_str())?
             .filter_map(|xs| match xs {
                 Ok(fname) => match fname.file_name().to_string_lossy().split('_').last() {
                     Some(idstr) => match idstr.split('.').next() {
@@ -72,8 +69,7 @@ impl Cache {
     }
 
     pub fn print_details(&self) -> Result<()> {
-        let idset: HashSet<Uuid> = std::fs::read_dir(self.root.as_str())
-            .into_diagnostic()?
+        let idset: HashSet<Uuid> = std::fs::read_dir(self.root.as_str())?
             .filter_map(|xs| match xs {
                 Ok(fname) => {
                     let file_name = fname.file_name();
@@ -172,7 +168,7 @@ impl Cache {
 
     pub fn cache_page(&mut self, id: &Uuid) -> Result<Page> {
         if self.pending.contains(id) {
-            return Err(miette!("Declining to fetch a page twice"));
+            return Err(anyhow!("Declining to fetch a page twice"));
         }
         let page = self.fetch_item::<Page>(id, false)?;
         println!("        got '{}'", page.title().green());
@@ -241,11 +237,11 @@ impl Cache {
         self.save_item(&file_info, file_info.id())?;
         let dlurl = file_info.download_info().url.clone();
         // println!("            downloading file data {}", file_info.filename().yellow());
-        let bytes = self.nuclino.download_file(dlurl.as_str()).into_diagnostic()?;
+        let bytes = self.nuclino.download_file(dlurl.as_str())?;
 
         let fpath = self.file_path(File::slug(), file_info.filename());
         println!("            {}; data length={}", fpath.yellow(), bytes.len());
-        std::fs::write(fpath, bytes).into_diagnostic()?;
+        std::fs::write(fpath, bytes)?;
 
         Ok(())
     }
@@ -253,9 +249,7 @@ impl Cache {
     pub fn _load_file(&self, file_info: &File) -> Result<Vec<u8>> {
         let fpath = self.file_path(File::slug(), file_info.filename());
         // println!("file path is {}", fpath.yellow());
-        let bytes = std::fs::read(fpath)
-            .into_diagnostic()
-            .context("loading file path {fpath}")?;
+        let bytes = std::fs::read(fpath).context("loading file path {fpath}")?;
         Ok(bytes)
     }
 }
@@ -271,15 +265,15 @@ where
 {
     /// Load the data from a local cache file and deserialize.
     fn load(fpath: &str) -> Result<Box<Self>> {
-        let bytes = std::fs::read(fpath).into_diagnostic()?;
-        let data = serde_json::from_slice::<T>(bytes.as_slice()).into_diagnostic()?;
+        let bytes = std::fs::read(fpath)?;
+        let data = serde_json::from_slice::<T>(bytes.as_slice())?;
         Ok(Box::new(data))
     }
 
     /// Serialize the data to a file in the local cache.
     fn save(&self, fpath: String) -> Result<()> {
-        let bytes = serde_json::to_vec(self).into_diagnostic()?;
-        std::fs::write(fpath, bytes).into_diagnostic()?;
+        let bytes = serde_json::to_vec(self)?;
+        std::fs::write(fpath, bytes)?;
         Ok(())
     }
 }
@@ -297,7 +291,7 @@ impl Fetchable for Page {
     }
 
     fn fetch(nuclino: &nuclino_rs::Client, id: &Uuid) -> Result<Box<Self>> {
-        nuclino.page(id).map(Box::new).into_diagnostic()
+        nuclino.page(id).map(Box::new).map_err(|e| e.into())
     }
 }
 
@@ -307,7 +301,7 @@ impl Fetchable for User {
     }
 
     fn fetch(nuclino: &nuclino_rs::Client, id: &Uuid) -> Result<Box<Self>> {
-        nuclino.user(id).map(Box::new).into_diagnostic()
+        nuclino.user(id).map(Box::new).map_err(|e| e.into())
     }
 }
 
@@ -317,7 +311,7 @@ impl Fetchable for File {
     }
 
     fn fetch(nuclino: &nuclino_rs::Client, id: &Uuid) -> Result<Box<Self>> {
-        nuclino.file(id).map(Box::new).into_diagnostic()
+        nuclino.file(id).map(Box::new).map_err(|e| e.into())
     }
 }
 
@@ -327,6 +321,6 @@ impl Fetchable for Workspace {
     }
 
     fn fetch(nuclino: &nuclino_rs::Client, id: &Uuid) -> Result<Box<Self>> {
-        nuclino.workspace(id).map(Box::new).into_diagnostic()
+        nuclino.workspace(id).map(Box::new).map_err(|e| e.into())
     }
 }
