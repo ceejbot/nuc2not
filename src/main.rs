@@ -6,7 +6,7 @@
 mod cache;
 mod migrator;
 
-use std::process::exit;
+use std::process::{self, exit};
 
 use anyhow::Result;
 use cache::Cache;
@@ -76,13 +76,26 @@ fn choose_workspace(nuclino_key: &str) -> Result<Workspace> {
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let _ignored = dotenvy::dotenv()?;
+    let found_dotenv = dotenvy::dotenv().ok();
+    if found_dotenv.is_none() {
+        println!(
+            "Did not find a {} file; proceeding with the existing environment.",
+            ".env".bold().blue()
+        );
+    }
     let notion_key =
         std::env::var("NOTION_API_KEY").expect("You must provide a Notion api key in the env var NOTION_API_KEY.");
     let nuclino_key =
         std::env::var("NUCLINO_API_KEY").expect("You must provide a Nuclino api key in the env var NUCLINO_API_KEY.");
 
-    let found = choose_workspace(nuclino_key.as_str())?;
+    let found = match choose_workspace(nuclino_key.as_str()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("Could not select a nuclino workspace to act on!");
+            eprintln!("{e:?}");
+            process::exit(1);
+        }
+    };
     let mut cache = Cache::new(nuclino_key, &args, &found)?;
 
     match args.cmd {

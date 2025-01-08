@@ -22,6 +22,8 @@ pub use retries::{do_append, do_create};
 
 /// The deepest level of nesting we'll allow in an API request.
 static MAX_NESTING: u8 = 1;
+/// The largest number of blocks Notion will allow in an API request.
+static MAX_BLOCK_COUNT: usize = 100;
 
 /// Convert a string slice containing Markdown into a Notion Page in your Notion team.
 /// This function makes as many API calls as necessary to create the page with
@@ -125,7 +127,7 @@ impl PageMaker {
                     current_tranche.push(head);
                 }
                 // Magic constant is an API limit. Make the request, then keep on going.
-                if current_tranche.len() == 100 {
+                if current_tranche.len() == MAX_BLOCK_COUNT {
                     let created =
                         do_append(&self.notion, parent_id, current_tranche.as_slice(), after.clone(), 0).await?;
                     if let Some(last) = created.last() {
